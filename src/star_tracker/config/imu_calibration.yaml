@@ -1,0 +1,31 @@
+compensation:
+  magnetic_declination: 0.0
+  temperature_coefficient: 0.01
+coordinate_convention: NED
+filtering:
+  complementary_filter_alpha: 0.98
+  lpf_cutoff: 5.0
+  use_kalman_filter: false
+imu_to_telescope:
+  euler_offsets:
+    pitch_offset: 26.979166666666668
+    roll_offset: 0.0
+    yaw_offset: 93.52083333333333
+  rotation_matrix:
+  - - 1.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 1.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 1.0
+mounting_offset:
+  x: 0.0
+  y: 0.0
+  z: 0.0
+validation:
+  hold_time: 3.0
+  max_pointing_error: 1.0
+  max_std_dev: 0.5

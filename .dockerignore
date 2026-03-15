@@ -1,0 +1,46 @@
+# Build artifacts
+build/
+install/
+log/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# ROS specific
+devel/
+.catkin_tools/
+
+# Docker files (don't copy these into the image)
+Dockerfile*
+docker-compose*.yml
+.dockerignore

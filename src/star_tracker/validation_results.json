@@ -1,0 +1,10 @@
+{
+  "syntax": true,
+  "imports": true,
+  "astropy": true,
+  "coordinates": true,
+  "mock_data": false,
+  "config": true,
+  "timestamp": "2025-09-10T19:37:44.992946",
+  "overall_success": false
+}
