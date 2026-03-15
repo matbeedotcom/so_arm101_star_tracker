@@ -1,0 +1,33 @@
+# Star Tracker workspace dependencies
+# Use with Python 3.11 conda env (star311) to match system libcamera .so
+#
+# Setup:
+#   conda create -n star311 python=3.11 -y
+#   conda activate star311
+#   pip install -r requirements.txt
+#
+# Then symlink system packages that can't be pip-installed:
+#   SITE=$(python3 -c "import site; print(site.getsitepackages()[0])")
+#   ln -s /usr/lib/python3/dist-packages/libcamera  $SITE/libcamera
+#   ln -s /usr/lib/python3/dist-packages/picamera2  $SITE/picamera2
+#   ln -s /usr/lib/python3/dist-packages/pykms      $SITE/pykms
+#   ln -s /usr/lib/python3/dist-packages/videodev2  $SITE/videodev2
+
+# Servo control
+feetech-servo-sdk
+
+# IMU (BNO055 over I2C)
+smbus2
+
+# Celestial coordinate calculations
+astropy
+
+# Camera (picamera2 runtime deps — picamera2 itself is symlinked from system)
+numpy
+pillow
+av
+pidng
+piexif
+simplejpeg
+v4l2-python3
+python-prctl
