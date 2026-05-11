@@ -221,6 +221,11 @@ def track_target(target_info, target_name, imu_bus, ph, pkt, strategy,
     if should_stop is None:
         should_stop = lambda: not running  # noqa: E731
 
+    # Clear any per-slew state (stall counts, saturation flags) before
+    # tracking. A joint that hit a slew-time wall isn't necessarily
+    # saturated for tracking's smaller corrections.
+    strategy.reset_slew()
+
     correction_count = 0
     capture_count = 0
 

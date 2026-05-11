@@ -77,8 +77,12 @@ class WristOnlyStrategy(MotionStrategy):
     # Stall classification: actual movement below this fraction of the
     # commanded delta counts as a stall.
     STALL_RATIO = 0.25
-    # Consecutive stalls before excluding a joint from further commands.
+    # Consecutive stalls before excluding a joint from further commands —
+    # but only if it's at its joint limit (true saturation). Mid-range
+    # stalls are stiction; we just keep escalating the command size.
     STALL_GIVE_UP = 2
+    # Ticks-from-limit that count as "at the limit" for saturation.
+    LIMIT_MARGIN = 30
 
     def __init__(self, shoulder_margin=100, wrist_pitch_dir=None):
         """
@@ -439,7 +443,15 @@ class WristOnlyStrategy(MotionStrategy):
         if actual_parts:
             print(f"    Actual: {'  '.join(actual_parts)}")
 
-        # Stall classification per touched joint
+        # Stall classification per touched joint.
+        # Two distinct failure modes the loop must not conflate:
+        #   - Saturation: joint is physically at its hardware limit.
+        #     Excluding it is correct; cascade should spill to next joint.
+        #   - Stiction: joint is mid-range but a small command didn't
+        #     break static friction. Escalating the command size is the
+        #     right response — excluding the joint cascades into other
+        #     joints with worse sign conventions and drives the arm into
+        #     bad poses.
         for sid, (start_pos, cmd_delta) in self._last_cmd.items():
             if cmd_delta == 0 or actuals.get(sid) is None:
                 continue
@@ -447,26 +459,37 @@ class WristOnlyStrategy(MotionStrategy):
             ratio = abs(actual) / max(1, abs(cmd_delta))
             if ratio < self.STALL_RATIO and abs(cmd_delta) >= 5:
                 self._stall_count[sid] = self._stall_count.get(sid, 0) + 1
-                # First stall: try clearing overload — it might just be
-                # the servo's protection latch.
                 try:
                     clear_overload(ph, pkt, sid)
                 except Exception:
                     pass
-                if self._stall_count[sid] >= self.STALL_GIVE_UP:
+                at_limit = self._near_joint_limit(sid, actuals[sid], cmd_delta)
+                if at_limit and self._stall_count[sid] >= self.STALL_GIVE_UP:
                     if sid not in self._saturated:
                         self._saturated.add(sid)
-                        print(f"    [stall] Motor {sid} saturated "
-                              f"(cmd {cmd_delta:+d}, moved {actual:+d}); "
-                              f"excluded for this slew")
+                        print(f"    [stall] Motor {sid} saturated at limit "
+                              f"(pos={actuals[sid]}, cmd {cmd_delta:+d}, "
+                              f"moved {actual:+d}); excluded")
                 else:
-                    print(f"    [stall] Motor {sid} stuck "
+                    label = "near limit" if at_limit else "mid-range"
+                    print(f"    [stall] Motor {sid} stuck {label} "
                           f"(cmd {cmd_delta:+d}, moved {actual:+d}, "
                           f"attempt {self._stall_count[sid]})")
             else:
                 # Joint moved enough — clear any prior stall count
                 if self._stall_count.get(sid, 0):
                     self._stall_count[sid] = 0
+
+    def _near_joint_limit(self, sid, pos, cmd_delta_ticks):
+        """True if `pos` is within LIMIT_MARGIN of the joint's hardware
+        limit in the direction the command was pushing.
+        """
+        if pos is None:
+            return False
+        lo, hi = JOINT_LIMITS[sid]
+        if cmd_delta_ticks > 0:
+            return (hi - pos) < self.LIMIT_MARGIN
+        return (pos - lo) < self.LIMIT_MARGIN
 
 
 # ── helpers ──
