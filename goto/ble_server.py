@@ -99,6 +99,15 @@ class BLEServer:
             except Exception:
                 log.exception("ensure_live_camera failed")
 
+        # Populate status.net immediately so the first status frame the
+        # web client sees lists reachable IPs. Worker thread's idle tick
+        # would eventually refresh this on its 10 s cadence, but the BLE
+        # client tends to connect before that fires.
+        try:
+            await self.session._refresh_network_state()
+        except Exception:
+            log.exception("initial network refresh failed")
+
         # --auto-media: bring the image server up at boot so clients can
         # connect by IP without needing a BLE round-trip first.
         if self.session.auto_media:

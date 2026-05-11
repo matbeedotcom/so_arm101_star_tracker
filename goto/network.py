@@ -72,14 +72,16 @@ async def list_addresses() -> list[NetInterface]:
     a socket probe if ``ip`` is unavailable or returns nothing useful.
     """
     out: list[NetInterface] = []
+    debug: list[str] = []  # collected so failures show one line in INFO
 
     if _have("ip"):
-        rc, raw, _ = await _run("ip", "-j", "addr", "show")
+        rc, raw, err = await _run("ip", "-j", "addr", "show")
         if rc == 0:
             try:
                 doc = json.loads(raw)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 doc = []
+                debug.append(f"json-parse: {e}")
             for iface in doc:
                 name = iface.get("ifname", "")
                 kind = _classify(name, iface)
@@ -92,10 +94,24 @@ async def list_addresses() -> list[NetInterface]:
                     if not ip:
                         continue
                     out.append(NetInterface(name=name, ip=ip, type=kind))
+            if not out:
+                debug.append(f"ip-j parsed {len(doc)} ifaces but no IPv4")
+        else:
+            debug.append(f"ip-j rc={rc} err={err.strip()[:80]}")
+    else:
+        debug.append("ip binary not found")
 
     if not out:
-        out.extend(await _fallback_addresses())
+        fb = await _fallback_addresses()
+        out.extend(fb)
+        debug.append(f"fallback added {len(fb)}")
 
+    log.info(
+        "list_addresses: %d %s%s",
+        len(out),
+        ",".join(f"{n.name}={n.ip}({n.type})" for n in out) or "(none)",
+        f"  [{'; '.join(debug)}]" if debug else "",
+    )
     return out
 
 
