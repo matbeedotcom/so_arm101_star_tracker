@@ -252,9 +252,13 @@ class WristOnlyStrategy(MotionStrategy):
         # Round sub-min-tick demands up to min-tick. Otherwise low-gain
         # track-mode corrections deadlock: the gained command is too
         # small for the servo and also too small for the wheel fallback,
-        # so nothing happens iteration after iteration.
-        if 0 < abs(needed_ticks) < min_t:
-            needed_ticks = min_t * (1 if needed_ticks >= 0 else -1)
+        # so nothing happens iteration after iteration. If we've stalled
+        # before, double the floor each time so the command grows until
+        # the servo overcomes stiction or we mark it saturated.
+        stall_boost = 1 << min(self._stall_count.get(SHOULDER_ROT, 0), 4)
+        floor = min(min_t * stall_boost, 60)
+        if 0 < abs(needed_ticks) < floor:
+            needed_ticks = floor * (1 if needed_ticks >= 0 else -1)
 
         new_pos = current_rot + needed_ticks
         in_range = (lo + self.shoulder_margin) <= new_pos <= (hi - self.shoulder_margin)
@@ -347,11 +351,14 @@ class WristOnlyStrategy(MotionStrategy):
 
             # Round sub-min-tick demands up to min-tick before clamping.
             # Without this, low-gain corrections crush below servo
-            # resolution and the loop deadlocks. The ~0.1° overshoot from
-            # rounding is harmless — next iter dials it back.
+            # resolution and the loop deadlocks. Each consecutive stall
+            # doubles the floor so the command grows until the servo
+            # breaks stiction or we mark it saturated.
             min_t = get_min_ticks(sid, speed)
-            if 0 < abs(step_ticks) < min_t:
-                step_ticks = min_t * (1 if step_ticks >= 0 else -1)
+            stall_boost = 1 << min(self._stall_count.get(sid, 0), 4)
+            floor = min(min_t * stall_boost, PITCH_MAX_STEP)
+            if 0 < abs(step_ticks) < floor:
+                step_ticks = floor * (1 if step_ticks >= 0 else -1)
 
             target = max(lo, min(hi, positions[sid] + step_ticks))
             actual_ticks = target - positions[sid]
@@ -438,7 +445,7 @@ class WristOnlyStrategy(MotionStrategy):
                 continue
             actual = actuals[sid] - start_pos
             ratio = abs(actual) / max(1, abs(cmd_delta))
-            if ratio < self.STALL_RATIO and abs(cmd_delta) >= 20:
+            if ratio < self.STALL_RATIO and abs(cmd_delta) >= 5:
                 self._stall_count[sid] = self._stall_count.get(sid, 0) + 1
                 # First stall: try clearing overload — it might just be
                 # the servo's protection latch.
