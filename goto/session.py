@@ -93,6 +93,12 @@ class TrackerSession:
         self.scheduler: Optional[Scheduler] = None
         self._suggestion: Optional[dict] = None
         self._workspace = os.path.dirname(os.path.dirname(__file__))
+
+        # Set by goto_ble.py CLI flags before the loop starts:
+        #   --auto-media → start image_server on boot
+        #   --open-media → don't require a token (LAN trust mode)
+        self.auto_media = bool(int(os.environ.get("STAR_TRACKER_AUTO_MEDIA", "0")))
+        self.media_open = bool(int(os.environ.get("STAR_TRACKER_OPEN_MEDIA", "0")))
         self._net: list[dict] = []
         self._ap: dict = {"active": False, "ssid": None, "passphrase": None,
                           "iface": None, "client_count": 0}
@@ -536,12 +542,17 @@ class TrackerSession:
             self.media = MediaBroadcaster(capture_dir=self.config.capture_dir)
             await self.media.start()
         if self.image_server is None:
-            self.image_server = ImageServer(self.media, port=self._media_port,
-                                            bursts_dir=self.config.capture_dir)
+            self.image_server = ImageServer(
+                self.media, port=self._media_port,
+                bursts_dir=self.config.capture_dir,
+                require_token=not self.media_open,
+            )
         if not self.image_server.running:
-            self._media_token = await self.image_server.start()
+            token = await self.image_server.start()
+            self._media_token = token or None
         self._net = await _network.list_addresses_dict()
-        self._log(f"D {cmd.req or ''} enable_media:ok port={self._media_port}")
+        self._log(f"D {cmd.req or ''} enable_media:ok port={self._media_port}"
+                  f" auth={'token' if self.image_server.require_token else 'open'}")
 
     async def _do_disable_media(self, cmd: Command) -> None:
         if self.image_server is not None and self.image_server.running:

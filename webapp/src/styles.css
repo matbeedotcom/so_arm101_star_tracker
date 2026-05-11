@@ -251,6 +251,19 @@ label { color: var(--text-dim); font-size: 12px; display: block; margin-bottom: 
 .err-inline { color: var(--err); }
 .card-header-right { float: right; }
 
+/* Direct connect form (LivePreview) */
+.direct-form {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.direct-field { flex: 1; }
+.direct-field-port { flex: 0 0 90px; }
+.direct-actions { margin-top: 8px; align-items: center; }
+.direct-hint { font-size: 11px; flex: 1; text-align: right; }
+
 /* Suggestion banner */
 .suggestion {
   margin-top: 14px;

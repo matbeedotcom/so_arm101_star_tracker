@@ -3,6 +3,27 @@ import type { StarTrackerClient } from "../ble";
 import { MediaClient, type MediaState } from "../media";
 import type { LiveFrameHeader, Status } from "../protocol";
 
+/** Stored across reloads so the user doesn't have to re-enter on refresh. */
+const DIRECT_LS_KEY = "star-tracker.direct-url";
+
+/** Read host/port/token from the page URL once (returns ws:// URL or null). */
+function readUrlParams(): string | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const host = params.get("host");
+  if (!host) return null;
+  const port = params.get("port") || "8765";
+  const token = params.get("token");
+  const path = params.get("path") || "/live";
+  return buildWsUrl(host, port, path, token);
+}
+
+function buildWsUrl(host: string, port: string | number, path: string, token: string | null): string {
+  const proto = typeof location !== "undefined" && location.protocol === "https:" ? "wss:" : "ws:";
+  const q = token ? `?token=${encodeURIComponent(token)}` : "";
+  return `${proto}//${host}:${port}${path}${q}`;
+}
+
 export function LivePreview({
   client, status,
 }: { client: StarTrackerClient; status: Status | null }) {
@@ -15,7 +36,13 @@ export function LivePreview({
   const [liveHeader, setLiveHeader] = useState<LiveFrameHeader | null>(null);
   const [mediaState, setMediaState] = useState<MediaState>("idle");
   const [mediaError, setMediaError] = useState<string | null>(null);
-  const [autoConnected, setAutoConnected] = useState(false);
+
+  // Direct connect — overrides BLE-driven auto-pick when set.
+  const [directUrl, setDirectUrl] = useState<string | null>(() => {
+    return readUrlParams() ?? localStorage.getItem(DIRECT_LS_KEY);
+  });
+  const [showDirectForm, setShowDirectForm] = useState(false);
+  const lastConnectUrl = useRef<string | null>(null);
 
   // BLE thumbnail subscription.
   useEffect(() => {
@@ -50,31 +77,48 @@ export function LivePreview({
     return () => media.disconnect();
   }, [media]);
 
-  // Auto-connect when status reports media enabled + a reachable IP.
+  // Decide which URL to connect to. Direct override wins; otherwise
+  // fall back to whatever the BLE Status snapshot advertises.
   const candidate = useMemo(() => pickCandidate(status), [status]);
-  useEffect(() => {
-    if (!candidate || autoConnected) return;
-    if (mediaState !== "idle" && mediaState !== "error") return;
-    media.connect(candidate.url).catch(() => {});
-    setAutoConnected(true);
-  }, [candidate, autoConnected, mediaState, media]);
+  const targetUrl = directUrl ?? candidate?.url ?? null;
 
-  // If media gets disabled server-side, drop the WS connection.
   useEffect(() => {
-    if (status && !status.media.enabled) {
+    if (!targetUrl) return;
+    if (lastConnectUrl.current === targetUrl) return;
+    media.connect(targetUrl).catch(() => {});
+    lastConnectUrl.current = targetUrl;
+  }, [targetUrl, media]);
+
+  // If BLE reports media disabled AND we don't have a direct override,
+  // tear the WS down. Direct override is sticky — user explicitly
+  // pointed us somewhere.
+  useEffect(() => {
+    if (!directUrl && status && !status.media.enabled) {
       media.disconnect();
-      setAutoConnected(false);
+      lastConnectUrl.current = null;
       if (liveUrl) { URL.revokeObjectURL(liveUrl); setLiveUrl(null); }
       setLiveHeader(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status?.media.enabled]);
+  }, [status?.media.enabled, directUrl]);
+
+  function applyDirectUrl(url: string | null) {
+    if (url) {
+      localStorage.setItem(DIRECT_LS_KEY, url);
+    } else {
+      localStorage.removeItem(DIRECT_LS_KEY);
+    }
+    setDirectUrl(url);
+    lastConnectUrl.current = null;     // force a fresh connect attempt
+    setShowDirectForm(false);
+  }
 
   // ── render ──
 
   const isLive = mediaState === "live" && liveUrl;
   const mediaEnabled = status?.media.enabled ?? false;
   const live = status?.live_preview;
+  const sourceLabel = directUrl ? "direct" : "ble";
 
   return (
     <div className="card">
@@ -82,18 +126,36 @@ export function LivePreview({
         Live preview
         <span className="preview-toolbar">
           {isLive && (
-            <span className="chip chip-tracking" title={candidate?.url}>
-              live · {liveHeader?.w}×{liveHeader?.h}
+            <span className="chip chip-tracking" title={lastConnectUrl.current || ""}>
+              live · {sourceLabel} · {liveHeader?.w}×{liveHeader?.h}
             </span>
           )}
-          {!isLive && live?.active && (
+          {!isLive && mediaState === "connecting" && (
+            <span className="chip chip-init">connecting…</span>
+          )}
+          {!isLive && mediaState === "reconnecting" && (
+            <span className="chip chip-init">reconnecting…</span>
+          )}
+          {!isLive && mediaState === "error" && (
+            <span className="chip chip-error" title={mediaError ?? undefined}>ws error</span>
+          )}
+          {!isLive && mediaState === "idle" && live?.active && (
             <span className="chip chip-idle" title="picamera2 streaming via broadcaster">
               picam · {live.fps_actual.toFixed(1)} fps
             </span>
           )}
-          {!isLive && !live?.active && thumbUrl && (
+          {!isLive && mediaState === "idle" && !live?.active && thumbUrl && (
             <span className="chip chip-idle">BLE · thumb</span>
           )}
+
+          <button
+            type="button"
+            className="btn-mini"
+            onClick={() => setShowDirectForm((v) => !v)}
+            title="Connect directly to a known WebSocket without going through BLE discovery"
+          >
+            {directUrl ? "Direct ✓" : "Direct"}
+          </button>
           {live && !live.active && live.available && status?.hw.camera === false && (
             <button
               type="button"
@@ -132,6 +194,14 @@ export function LivePreview({
         </span>
       </h2>
 
+      {showDirectForm && (
+        <DirectConnectForm
+          initial={directUrl}
+          status={status}
+          onApply={applyDirectUrl}
+        />
+      )}
+
       <div className="preview-stage">
         {isLive ? (
           <img className="preview-image" src={liveUrl!} alt="live frame" />
@@ -163,16 +233,15 @@ export function LivePreview({
             {" · "}{new Date(liveHeader.t * 1000).toLocaleTimeString()}
             {live?.active && <> · picam {live.w}×{live.h} @ {live.fps_actual.toFixed(1)}fps</>}
           </>
-        ) : mediaEnabled && candidate ? (
+        ) : targetUrl ? (
           <>
-            connecting to {candidate.url}
-            {mediaState === "reconnecting" && " (retrying…)"}
+            {mediaState} → <span className="mono">{targetUrl}</span>
             {mediaError && <span className="err-inline"> · {mediaError}</span>}
           </>
         ) : mediaEnabled && !candidate ? (
-          <>media enabled but no reachable IP — start a hotspot or join the same network</>
+          <>media enabled but no reachable IP advertised — use Direct ▸ to enter one, or join the Pi's hotspot</>
         ) : live?.active ? (
-          <>picam streaming · enable media stream to view full frames in this browser</>
+          <>picam streaming · enable media stream + connect to view full frames</>
         ) : (
           <>BLE preview only · enable the stream for full-resolution frames</>
         )}
@@ -186,7 +255,6 @@ function pickCandidate(status: Status | null): { url: string; ip: string } | nul
   if (!status?.media.enabled) return null;
   const { net, media } = status;
   if (!net?.length) return null;
-  // Prefer Wi-Fi/AP over loopback; fall back to whatever's there.
   const order = ["wifi", "ap", "eth", "other"];
   const sorted = [...net].sort(
     (a, b) => order.indexOf(a.type) - order.indexOf(b.type),
@@ -197,4 +265,83 @@ function pickCandidate(status: Status | null): { url: string; ip: string } | nul
     ip: pick.ip,
     url: MediaClient.urlFor(pick.ip, media.port, media.path, media.token),
   };
+}
+
+function DirectConnectForm({
+  initial, status, onApply,
+}: {
+  initial: string | null;
+  status: Status | null;
+  onApply: (url: string | null) => void;
+}) {
+  // Parse the initial URL so the form starts populated, if possible.
+  const seeded = useMemo(() => parseWsUrl(initial), [initial]);
+
+  const [host, setHost] = useState(seeded?.host
+    ?? status?.net?.find(n => n.ip && n.ip !== "127.0.0.1")?.ip
+    ?? "");
+  const [port, setPort] = useState(seeded?.port ?? String(status?.media.port ?? 8765));
+  const [token, setToken] = useState(seeded?.token ?? status?.media.token ?? "");
+
+  return (
+    <div className="direct-form">
+      <div className="row">
+        <div className="direct-field">
+          <label>Host / IP</label>
+          <input
+            value={host}
+            onChange={e => setHost(e.target.value)}
+            placeholder="192.168.18.2"
+          />
+        </div>
+        <div className="direct-field direct-field-port">
+          <label>Port</label>
+          <input
+            value={port}
+            onChange={e => setPort(e.target.value)}
+            placeholder="8765"
+            inputMode="numeric"
+          />
+        </div>
+        <div className="direct-field">
+          <label>Token <span className="faint">(blank for open mode)</span></label>
+          <input
+            value={token}
+            onChange={e => setToken(e.target.value)}
+            placeholder="(optional)"
+          />
+        </div>
+      </div>
+      <div className="row direct-actions">
+        <button
+          type="button"
+          className="primary"
+          disabled={!host || !port}
+          onClick={() => onApply(buildWsUrl(host, port, "/live", token.trim() || null))}
+        >
+          Connect direct
+        </button>
+        {initial && (
+          <button type="button" onClick={() => onApply(null)}>
+            Clear (use BLE)
+          </button>
+        )}
+        <div className="faint direct-hint">
+          Bookmarkable: append <span className="mono">?host={host || "<ip>"}&amp;port={port || "8765"}{token ? `&token=${token}` : ""}</span> to the page URL.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function parseWsUrl(url: string | null): { host: string; port: string; token: string | null } | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return {
+      host: u.hostname,
+      port: u.port || "8765",
+      token: u.searchParams.get("token"),
+    };
+  } catch { return null; }
 }

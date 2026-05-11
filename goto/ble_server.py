@@ -99,6 +99,15 @@ class BLEServer:
             except Exception:
                 log.exception("ensure_live_camera failed")
 
+        # --auto-media: bring the image server up at boot so clients can
+        # connect by IP without needing a BLE round-trip first.
+        if self.session.auto_media:
+            try:
+                from .session import Command as _Cmd
+                await self.session._do_enable_media(_Cmd(cmd="enable_media"))
+            except Exception:
+                log.exception("auto-media start failed")
+
         await self.server.add_new_service(SERVICE_UUID)
 
         await self.server.add_new_characteristic(

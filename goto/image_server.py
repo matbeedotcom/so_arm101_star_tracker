@@ -39,10 +39,15 @@ class ImageServer:
         broadcaster: MediaBroadcaster,
         port: int = 8765,
         bursts_dir: str = "speckle_captures",
+        require_token: bool = True,
     ):
         self.broadcaster = broadcaster
         self.port = port
         self.bursts_dir = bursts_dir
+        # When False, the WebSocket accepts any client without checking
+        # the ?token= query. Useful on a trusted LAN where you want to
+        # bookmark a direct URL without going through BLE first.
+        self.require_token = require_token
         self.token: Optional[str] = None
 
         self._app: Optional[web.Application] = None
@@ -62,7 +67,9 @@ class ImageServer:
         if self.running:
             return self.token or ""
 
-        self.token = secrets.token_urlsafe(12)
+        # Open mode: no token issued, anything goes. Token mode: rotate
+        # on every start so a leaked URL doesn't survive a restart.
+        self.token = secrets.token_urlsafe(12) if self.require_token else None
 
         app = web.Application()
         app.router.add_get("/health", self._health)
@@ -80,9 +87,12 @@ class ImageServer:
         self._unsubscribe = self.broadcaster.on_frame(self._on_frame)
         self._hb_task = asyncio.create_task(self._heartbeat(), name="ws-heartbeat")
 
-        log.info("image server listening on 0.0.0.0:%d (token=%s…)",
-                 self.port, self.token[:4])
-        return self.token
+        log.info(
+            "image server listening on 0.0.0.0:%d %s",
+            self.port,
+            f"(token={self.token[:4]}…)" if self.token else "(open — no token)",
+        )
+        return self.token or ""
 
     async def stop(self) -> None:
         if not self.running:
@@ -114,13 +124,17 @@ class ImageServer:
         return web.json_response({"ok": True, "clients": len(self._clients)})
 
     async def _ws(self, req: web.Request) -> web.WebSocketResponse:
-        if self.token and req.query.get("token") != self.token:
-            return web.Response(status=401, text="bad token")
+        if self.require_token:
+            supplied = req.query.get("token") or req.headers.get("x-token")
+            if supplied != self.token:
+                log.warning("ws auth failed from %s", req.remote)
+                return web.Response(status=401, text="bad token")
 
         ws = web.WebSocketResponse(heartbeat=20)
         await ws.prepare(req)
         self._clients.add(ws)
-        log.info("ws client connected (%d total)", len(self._clients))
+        log.info("ws client connected from %s (%d total)",
+                 req.remote, len(self._clients))
 
         # Replay the latest frame immediately so the UI doesn't sit blank.
         if self.broadcaster.latest_preview is not None:

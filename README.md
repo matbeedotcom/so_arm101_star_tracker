@@ -162,6 +162,32 @@ The image server is part of `goto_ble.py` — same process, separate
 `dhcpcd`, hotspot won't work but everything else (BLE thumbnail +
 WebSocket on existing LAN) does.
 
+#### Bypassing BLE discovery
+
+If you already know the Pi's IP — common on a fixed LAN, or when
+debugging — you can skip the BLE round-trip entirely for the video
+stream:
+
+```bash
+# Pi: start the image server at boot, no token required.
+sudo .venv/bin/python3 goto_ble.py --auto-media --open-media
+```
+
+Then in the web client, click **Direct ▸** in the Live preview header
+and enter `host:port` (token blank in open mode). Or bookmark a URL:
+
+```
+http://your-webapp/?host=192.168.18.2&port=8765
+```
+
+You still need BLE for commands (goto, calibration, scheduling). The
+direct path is just for the video pipe.
+
+- `--auto-media` — start the WebSocket server at boot instead of
+  waiting for the BLE `enable_media` command
+- `--open-media` — don't issue or require a token. Use only on a
+  network you trust; anyone reachable on the port can view the stream
+
 ## Calibration
 
 Two separate things, both run from the CLI:
