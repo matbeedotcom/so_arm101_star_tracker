@@ -29,9 +29,15 @@ log = logging.getLogger("live_camera")
 try:
     from picamera2 import Picamera2  # type: ignore
     _HAVE_PICAMERA2 = True
-except Exception:
+    _PICAMERA2_IMPORT_ERROR: Optional[str] = None
+except Exception as _e:
     Picamera2 = None  # type: ignore
     _HAVE_PICAMERA2 = False
+    # Capture the exception type + message so we don't lose the root
+    # cause to a silent "not available" log line. Common causes on the
+    # Pi: conda env shadowing system picamera2 with no matching
+    # libcamera C extension; ABI mismatch between Python versions.
+    _PICAMERA2_IMPORT_ERROR = f"{type(_e).__name__}: {_e}"
 
 
 FrameSink = Callable[[np.ndarray, dict], Awaitable[None] | None]
@@ -67,7 +73,14 @@ class LiveCamera:
     async def start(self) -> bool:
         """Open the camera and start the pull loop. Returns False if no-op."""
         if not _HAVE_PICAMERA2:
-            log.info("picamera2 not available — LiveCamera disabled")
+            log.warning(
+                "picamera2 unavailable — LiveCamera disabled. import error: %s. "
+                "On the Pi this is usually conda shadowing the apt-installed "
+                "picamera2 with a Python version that has no matching libcamera "
+                "C extension. Run with /usr/bin/python3 (system Python 3.11) or "
+                "create a 3.11 conda env per README.",
+                _PICAMERA2_IMPORT_ERROR or "(no exception captured)",
+            )
             self.available = False
             return False
         if self.running:
@@ -134,6 +147,7 @@ class LiveCamera:
             "h": self.resolution[1],
             "exposure_us": self.exposure_us,
             "frames": self._frame_n,
+            "import_error": _PICAMERA2_IMPORT_ERROR,
         }
 
     def update_controls(self, *, exposure_us: Optional[int] = None,

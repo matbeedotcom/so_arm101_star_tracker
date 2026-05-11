@@ -44,6 +44,30 @@ export interface Status {
   net: NetInterface[];
   ap: APState;
   live_preview: LivePreviewState;
+  schedule: ScheduledJob[];
+  suggestion: Suggestion | null;
+}
+
+export interface ScheduledJob {
+  id: number;
+  spec: Record<string, unknown>;     // goto args (target | ra+dec | alt+az)
+  at: string;                        // ISO 8601 UTC
+  state: "pending" | "running" | "done" | "cancelled" | "failed";
+  note: string;
+  created: string;
+  fired_at?: string | null;
+  error?: string | null;
+}
+
+export interface Suggestion {
+  action: "schedule" | "out_of_range";
+  spec: Record<string, unknown>;
+  reason: string;
+  current_alt: number;
+  current_az: number;
+  next_visible: string | null;       // ISO 8601 UTC
+  alt_at_time: number | null;
+  minutes_from_now: number | null;
 }
 
 export interface LivePreviewState {
@@ -55,6 +79,7 @@ export interface LivePreviewState {
   h: number;
   exposure_us: number;
   frames: number;
+  import_error?: string | null;   // exception text when available=false
 }
 
 export interface NetInterface {
@@ -121,4 +146,7 @@ export type Command =
   | { cmd: "start_ap"; req?: number; ssid: string; passphrase: string; iface?: string }
   | { cmd: "stop_ap"; req?: number }
   | { cmd: "live_start"; req?: number }
-  | { cmd: "live_stop"; req?: number };
+  | { cmd: "live_stop"; req?: number }
+  | { cmd: "schedule"; req?: number; at: string; target?: string; ra?: string; dec?: string; alt?: number; az?: number; note?: string }
+  | { cmd: "cancel_schedule"; req?: number; id: number }
+  | { cmd: "dismiss_suggestion"; req?: number };

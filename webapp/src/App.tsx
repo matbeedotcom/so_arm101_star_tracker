@@ -10,6 +10,8 @@ import { ConfigPanel } from "./components/ConfigPanel";
 import { LogStream } from "./components/LogStream";
 import { LivePreview } from "./components/LivePreview";
 import { NetworkPanel } from "./components/NetworkPanel";
+import { SuggestionBanner } from "./components/SuggestionBanner";
+import { SchedulePanel } from "./components/SchedulePanel";
 
 export function App() {
   // Single client instance for the app lifetime.
@@ -73,12 +75,15 @@ export function App() {
         <>
           <TelemetryPanel status={status} />
 
+          <SuggestionBanner client={client} status={status} />
+
           <div className="section">
             <LivePreview client={client} status={status} />
           </div>
 
           <div className="grid section">
             <TargetSelector client={client} stars={targets.stars} planets={targets.planets} status={status} />
+            <SchedulePanel client={client} status={status} />
             <PoseManager client={client} poses={poses?.poses ?? []} status={status} />
             <CalibrationPanel client={client} status={status} />
             <ConfigPanel client={client} status={status} />

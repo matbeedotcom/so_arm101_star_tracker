@@ -62,6 +62,17 @@ PROTOCOL_VERSION = 1
 #   {"cmd":"live_start",    "req":<int>}            # picamera2 low-res stream
 #   {"cmd":"live_stop",     "req":<int>}            # release camera
 #
+#   # ── Scheduling ──
+#   # When a goto target is below the horizon the session populates
+#   # ``status.suggestion`` with the next visible time. The client uses
+#   # ``schedule`` to defer the goto until then.
+#   {"cmd":"schedule",      "req":<int>,
+#        "at":"2026-05-11T22:30:00Z",
+#        # plus exactly one of the goto target forms:
+#        "target":"polaris" }                        # or "ra"+"dec", or "alt"+"az"
+#   {"cmd":"cancel_schedule","req":<int>, "id":<int>}
+#   {"cmd":"dismiss_suggestion","req":<int>}
+#
 # ── Status (device → client, CHAR_STATUS, notify ~2 Hz) ──
 #
 #   {
@@ -88,7 +99,24 @@ PROTOCOL_VERSION = 1
 #     # picamera2 live preview status (set when speckle isn't using the cam):
 #     "live_preview": {"active":true, "available":true,
 #                      "fps_target":10, "fps_actual":9.6,
-#                      "w":640, "h":480, "exposure_us":20000, "frames":1234}
+#                      "w":640, "h":480, "exposure_us":20000, "frames":1234},
+#
+#     # Scheduling
+#     "schedule": [
+#       {"id":7, "spec":{"target":"polaris"}, "at":"2026-05-11T22:30:00Z",
+#        "state":"pending", "note":"", "created":"...", "fired_at":null,
+#        "error":null}, ...
+#     ],
+#     # Set when a goto fails because the target is below the horizon —
+#     # cleared on dismiss_suggestion or a successful goto/schedule.
+#     "suggestion": {
+#       "action":"schedule",                          # or "out_of_range"
+#       "spec":{"target":"polaris"},
+#       "reason":"below horizon (alt=-48.1°)",
+#       "current_alt": -48.1, "current_az": 5.2,
+#       "next_visible":"2026-05-11T22:30:00Z",
+#       "alt_at_time": 11.0, "minutes_from_now": 743
+#     }
 #   }
 #
 # ── Preview (device → client, CHAR_PREVIEW, notify-only) ──

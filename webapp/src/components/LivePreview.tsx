@@ -145,6 +145,11 @@ export function LivePreview({
                 ? "Start picam preview, or capture a burst to see imagery."
                 : "Capture a burst (or enable media stream) to see imagery."}
             </div>
+            {live && !live.available && live.import_error && (
+              <div className="faint preview-empty-hint err-inline mono">
+                picamera2 import error: {live.import_error}
+              </div>
+            )}
           </div>
         )}
       </div>

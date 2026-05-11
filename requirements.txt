@@ -1,39 +1,24 @@
-# Star Tracker workspace dependencies
-# Use with Python 3.11 conda env (star311) to match system libcamera .so
+# Star Tracker workspace dependencies — pip-installable subset.
 #
-# Setup:
-#   conda create -n star311 python=3.11 -y
-#   conda activate star311
+# On Raspberry Pi OS Bookworm the recommended setup is a venv that
+# inherits system site-packages so picamera2 / libcamera (which can't
+# be pip-installed) are visible:
+#
+#   sudo apt install -y python3-full python3-venv \
+#       python3-picamera2 python3-libcamera \
+#       python3-astropy python3-aiohttp python3-pil python3-numpy \
+#       python3-smbus2
+#   python3 -m venv --system-site-packages .venv
+#   source .venv/bin/activate
 #   pip install -r requirements.txt
 #
-# Then symlink system packages that can't be pip-installed:
-#   SITE=$(python3 -c "import site; print(site.getsitepackages()[0])")
-#   ln -s /usr/lib/python3/dist-packages/libcamera  $SITE/libcamera
-#   ln -s /usr/lib/python3/dist-packages/picamera2  $SITE/picamera2
-#   ln -s /usr/lib/python3/dist-packages/pykms      $SITE/pykms
-#   ln -s /usr/lib/python3/dist-packages/videodev2  $SITE/videodev2
+# Packages listed below are the ones apt doesn't ship (or that pip's
+# version is preferable). Everything else — picamera2, libcamera,
+# numpy, pillow, astropy, aiohttp, smbus2 — is inherited from the
+# system via --system-site-packages.
 
-# Servo control
+# Servo control (provides the `scservo_sdk` import)
 feetech-servo-sdk
 
-# IMU (BNO055 over I2C)
-smbus2
-
-# Celestial coordinate calculations
-astropy
-
-# Camera (picamera2 runtime deps — picamera2 itself is symlinked from system)
-numpy
-pillow
-av
-pidng
-piexif
-simplejpeg
-v4l2-python3
-python-prctl
-
-# BLE peripheral (goto_ble.py — cross-platform GATT server using BlueZ on Linux)
+# BLE GATT peripheral (goto_ble.py)
 bless
-
-# Image streaming server (WebSocket + HTTP) for the web client
-aiohttp

@@ -17,6 +17,7 @@ through it, serialised by a single worker thread. The BLE server polls
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import json
@@ -43,7 +44,8 @@ from .config import (
 )
 from .imu import init_imu, read_imu, calib_str, calibrate_imu, gravity_pitch
 from .servos import init_servos, move_to_pose, stop_wheels
-from .celestial import resolve_target, compute_altaz
+from .celestial import resolve_target, compute_altaz, next_rise_time
+from .scheduler import Scheduler, ScheduledJob
 from .strategy import WristOnlyStrategy
 from .tracker import (
     slew_to_target, track_target,
@@ -88,6 +90,9 @@ class TrackerSession:
         self.live_camera: Optional[LiveCamera] = None
         self._media_port = 8765
         self._media_token: Optional[str] = None
+        self.scheduler: Optional[Scheduler] = None
+        self._suggestion: Optional[dict] = None
+        self._workspace = os.path.dirname(os.path.dirname(__file__))
         self._net: list[dict] = []
         self._ap: dict = {"active": False, "ssid": None, "passphrase": None,
                           "iface": None, "client_count": 0}
@@ -126,6 +131,14 @@ class TrackerSession:
     def attach_loop(self, loop) -> None:
         """Bind the BLE asyncio loop. Required before media commands work."""
         self._loop = loop
+        # Scheduler runs on the BLE loop. Fire callbacks queue normal goto
+        # commands into the same worker thread that handles BLE-driven gotos.
+        if self.scheduler is None:
+            self.scheduler = Scheduler(
+                store_path=os.path.join(self._workspace, "schedule.json"),
+                on_fire=self._on_scheduled_fire,
+            )
+            asyncio.run_coroutine_threadsafe(self.scheduler.start(), loop)
 
     def submit(self, cmd: Command) -> None:
         """Queue a command. Returns immediately."""
@@ -149,6 +162,9 @@ class TrackerSession:
         self._close_hw()
 
     async def _shutdown_media(self) -> None:
+        if self.scheduler is not None:
+            try: await self.scheduler.stop()
+            except Exception: pass
         if self.live_camera is not None:
             try: await self.live_camera.stop()
             except Exception: pass
@@ -190,8 +206,10 @@ class TrackerSession:
             self.live_camera.status() if self.live_camera is not None
             else {"active": False, "available": False, "fps_target": 0,
                   "fps_actual": 0.0, "w": 0, "h": 0, "exposure_us": 0,
-                  "frames": 0}
+                  "frames": 0, "import_error": None}
         )
+        s["schedule"] = self.scheduler.list_jobs() if self.scheduler else []
+        s["suggestion"] = self._suggestion
         return s
 
     def list_poses(self) -> list:
@@ -295,6 +313,14 @@ class TrackerSession:
                 self._async(self._do_live_start(cmd))
             elif c == "live_stop":
                 self._async(self._do_live_stop(cmd))
+            elif c == "schedule":
+                self._do_schedule(cmd)
+            elif c == "cancel_schedule":
+                self._do_cancel_schedule(cmd)
+            elif c == "dismiss_suggestion":
+                with self._lock:
+                    self._suggestion = None
+                self._log(f"D {cmd.req or ''} dismiss_suggestion:ok")
             else:
                 self._log(f"E {cmd.req or ''} unknown cmd: {c}")
         except Exception as e:
@@ -325,10 +351,33 @@ class TrackerSession:
 
         alt, az = compute_altaz(info)
         if alt < 0:
+            # Don't just error — work out when this becomes visible so the
+            # client can offer to schedule the goto for then.
+            try:
+                rise = next_rise_time(info, min_alt=10.0)
+            except Exception as e:
+                rise = None
+                self._log(f"W rise-time calc failed: {e}")
+            spec = dict(a) if (a := cmd.args) else {}
+            if not spec:
+                spec = {"target": name}
+            with self._lock:
+                self._suggestion = {
+                    "action": "schedule" if rise else "out_of_range",
+                    "spec": spec,
+                    "reason": f"below horizon (alt={alt:.1f}°)",
+                    "current_alt": round(alt, 1),
+                    "current_az": round(az, 1),
+                    "next_visible": (rise or {}).get("iso"),
+                    "alt_at_time": (rise or {}).get("alt"),
+                    "minutes_from_now": (rise or {}).get("minutes_from_now"),
+                }
             raise ValueError(f"target below horizon (alt={alt:.1f}°)")
 
         with self._lock:
             self._status["target"] = name
+            # Successful goto clears any pending suggestion.
+            self._suggestion = None
 
         self._log(f"I {cmd.req or ''} goto {name}: alt={alt:.1f}° az={az:.1f}°")
         active_mode = MODE_NDOF if self.config.mode == "ndof" else MODE_IMU
@@ -536,6 +585,39 @@ class TrackerSession:
         await self._stop_live_camera()
         self.live_camera = None
         self._log(f"D {cmd.req or ''} live_stop:ok")
+
+    # ── Scheduling ──
+
+    def _do_schedule(self, cmd: Command) -> None:
+        if self.scheduler is None:
+            raise RuntimeError("scheduler not running")
+        args = dict(cmd.args)
+        at = args.pop("at", None)
+        if not at:
+            raise ValueError("schedule needs 'at' (ISO 8601 timestamp)")
+        note = args.pop("note", "")
+        # Anything left is the goto spec (target / ra+dec / alt+az).
+        if not args:
+            raise ValueError("schedule needs a target spec")
+        job = self.scheduler.add(spec=args, at=at, note=note)
+        with self._lock:
+            self._suggestion = None  # user took action on the suggestion
+        self._log(f"D {cmd.req or ''} schedule:{job.id} {at} {args}")
+
+    def _do_cancel_schedule(self, cmd: Command) -> None:
+        if self.scheduler is None:
+            raise RuntimeError("scheduler not running")
+        jid = int(cmd.args.get("id", 0))
+        if self.scheduler.cancel(jid):
+            self._log(f"D {cmd.req or ''} cancel_schedule:{jid}")
+        else:
+            raise ValueError(f"job {jid} not found or not pending")
+
+    async def _on_scheduled_fire(self, job: ScheduledJob) -> None:
+        # Submit a normal goto through the worker so it runs serialised
+        # with anything else the user is doing.
+        self._log(f"I scheduler firing job {job.id}: {job.spec}")
+        self.submit(Command(cmd="goto", req=None, args=dict(job.spec)))
 
     async def _do_start_ap(self, cmd: Command) -> None:
         ssid = str(cmd.args.get("ssid") or "StarTracker")

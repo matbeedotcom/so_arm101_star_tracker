@@ -41,27 +41,46 @@ across sessions.
 Observer location, port assignments, and servo IDs live in
 [`goto/config.py`](goto/config.py).
 
-## Install
+## Install (Raspberry Pi OS Bookworm)
 
-Python 3.11 in a conda env (matches the Pi's system `libcamera`):
+`picamera2` and `libcamera` ship as apt packages on Pi OS and can't be
+pip-installed (their C extensions are built against the system Python).
+Bookworm also blocks system-wide pip per PEP 668. The clean solution is
+a **venv that inherits system site-packages**: pip works inside the
+venv, and the apt-installed camera stack stays visible.
 
 ```bash
-conda create -n star311 python=3.11 -y
-conda activate star311
+# 1. apt deps — picamera2/libcamera plus things we'd rather get from
+#    Debian than pip (faster wheels, signed updates):
+sudo apt install -y python3-full python3-venv \
+    python3-picamera2 python3-libcamera \
+    python3-astropy python3-aiohttp python3-pil python3-numpy \
+    python3-smbus2
+
+# 2. venv with inheritance — required so `import picamera2` works:
+cd ~/dev/star_tracker_ws        # or wherever you cloned
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+
+# 3. pip-only deps (bless + the Feetech servo SDK):
 pip install -r requirements.txt
 
-# System packages picamera2 can't be pip-installed — symlink them in:
-SITE=$(python3 -c "import site; print(site.getsitepackages()[0])")
-for pkg in libcamera picamera2 pykms videodev2; do
-  ln -s /usr/lib/python3/dist-packages/$pkg $SITE/$pkg
-done
+# 4. sanity check
+python3 -c "from picamera2 import Picamera2; print('camera ok')"
+python3 -c "import scservo_sdk, bless, astropy; print('deps ok')"
 ```
 
-Add yourself to `dialout` (for the servo USB) and `i2c` (for the IMU):
+Add yourself to `dialout` (servo USB) and `i2c` (IMU):
 
 ```bash
 sudo usermod -aG dialout,i2c $USER
+# log out / back in for it to take effect
 ```
+
+> **macOS / non-Pi dev machines**: skip the apt step and the camera
+> packages — `python3 -m venv .venv && pip install -r requirements.txt`
+> is enough to run `goto.py` against any servo bus you wire up. The
+> camera + speckle bits gracefully no-op when picamera2 isn't present.
 
 ## CLI — `goto.py`
 
@@ -91,10 +110,13 @@ connects over Bluetooth LE; everything else stays the same.
 ### Pi side
 
 ```bash
-sudo python3 goto_ble.py                   # advertises as "StarTracker"
+# from the workspace directory
+sudo .venv/bin/python3 goto_ble.py         # advertises as "StarTracker"
 ```
 
-Or run it as a service:
+Or run it as a service (assumes the venv lives at `.venv/` per the
+Install section — edit the unit if you cloned somewhere other than
+`~/dev/star_tracker_ws`):
 
 ```bash
 sudo cp systemd/star-tracker-ble.service /etc/systemd/system/
@@ -103,8 +125,9 @@ sudo systemctl enable --now star-tracker-ble
 journalctl -u star-tracker-ble -f
 ```
 
-Requires BlueZ ≥ 5.55. Root by default so it can advertise — drop
-privileges with `CAP_NET_ADMIN`/`CAP_NET_RAW` if you want.
+Requires BlueZ ≥ 5.55. Root by default so it can advertise and so
+`nmcli` works for the hotspot command — drop privileges with
+`CAP_NET_ADMIN`/`CAP_NET_RAW` if you want.
 
 ### Web client
 
