@@ -11,6 +11,7 @@ import {
   CHAR_INFO,
   CHAR_POSES,
   CHAR_LOG,
+  CHAR_PREVIEW,
   DEVICE_NAME,
   type Command,
   type Info,
@@ -33,6 +34,7 @@ export class StarTrackerClient {
     info?: BluetoothRemoteGATTCharacteristic;
     poses?: BluetoothRemoteGATTCharacteristic;
     log?: BluetoothRemoteGATTCharacteristic;
+    preview?: BluetoothRemoteGATTCharacteristic;
   } = {};
 
   // Request ids for command correlation
@@ -41,6 +43,7 @@ export class StarTrackerClient {
   private _statusListeners = new Set<Listener<Status>>();
   private _posesListeners = new Set<Listener<PosesPayload>>();
   private _logListeners = new Set<Listener<string>>();
+  private _previewListeners = new Set<Listener<Blob>>();
 
   get connected(): boolean {
     return !!this.server?.connected;
@@ -79,6 +82,9 @@ export class StarTrackerClient {
     this.chars.info    = await this.service.getCharacteristic(CHAR_INFO);
     this.chars.poses   = await this.service.getCharacteristic(CHAR_POSES);
     this.chars.log     = await this.service.getCharacteristic(CHAR_LOG);
+    // CHAR_PREVIEW is optional — older firmware won't have it.
+    try { this.chars.preview = await this.service.getCharacteristic(CHAR_PREVIEW); }
+    catch { /* preview unsupported */ }
 
     this.chars.status.addEventListener("characteristicvaluechanged", (e) => {
       const v = (e.target as BluetoothRemoteGATTCharacteristic).value;
@@ -106,6 +112,16 @@ export class StarTrackerClient {
     await this.chars.status.startNotifications();
     await this.chars.poses.startNotifications();
     await this.chars.log.startNotifications();
+
+    if (this.chars.preview) {
+      this.chars.preview.addEventListener("characteristicvaluechanged", (e) => {
+        const v = (e.target as BluetoothRemoteGATTCharacteristic).value;
+        if (!v || v.byteLength === 0) return;
+        const blob = new Blob([v.buffer], { type: "image/jpeg" });
+        this._previewListeners.forEach((fn) => fn(blob));
+      });
+      try { await this.chars.preview.startNotifications(); } catch { /* skip */ }
+    }
 
     // Prime listeners with whatever the characteristics already hold.
     await this._readInitial();
@@ -166,6 +182,13 @@ export class StarTrackerClient {
   onLog(fn: Listener<string>): () => void {
     this._logListeners.add(fn);
     return () => this._logListeners.delete(fn);
+  }
+  onPreview(fn: Listener<Blob>): () => void {
+    this._previewListeners.add(fn);
+    return () => this._previewListeners.delete(fn);
+  }
+  get hasPreview(): boolean {
+    return !!this.chars.preview;
   }
 
   private _fireConnection(state: boolean): void {

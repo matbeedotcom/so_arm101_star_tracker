@@ -123,6 +123,22 @@ streamed log. The GATT schema is in
 [`goto/ble_protocol.py`](goto/ble_protocol.py); the TypeScript mirror is
 [`webapp/src/protocol.ts`](webapp/src/protocol.ts).
 
+### Image streaming
+
+Camera frames are way too fat for BLE, so there's a three-tier path:
+
+| When you have…           | What you get                                      |
+| ------------------------ | ------------------------------------------------- |
+| BLE only                 | 96×96 grayscale JPEG thumbnail @ ≤2 Hz over the `Preview` characteristic |
+| Pi on shared Wi-Fi/Ethernet | Click **Enable stream** → WebSocket live preview at full resolution, auto-connect using the IP advertised in `Status.net` |
+| No infrastructure         | Click **Start hotspot** in the Network panel — Pi runs `nmcli device wifi hotspot`, BLE returns SSID + passphrase, join from the phone, stream connects automatically |
+
+The image server is part of `goto_ble.py` — same process, separate
+`aiohttp` runner on port 8765. Hotspot mode requires NetworkManager
+(Raspberry Pi OS Bookworm default) and root; if you're on Bullseye with
+`dhcpcd`, hotspot won't work but everything else (BLE thumbnail +
+WebSocket on existing LAN) does.
+
 ## Calibration
 
 Two separate things, both run from the CLI:
@@ -163,6 +179,9 @@ goto/
   session.py             Thread-safe controller for remote use
   ble_protocol.py        UUIDs + JSON schemas
   ble_server.py          GATT server (bless)
+  media.py               Capture-dir watcher → thumbnail + preview
+  image_server.py        aiohttp WebSocket + HTTP for live streaming
+  network.py             nmcli wrappers: address probe + hotspot control
 webapp/                  React + Vite + TS Web Bluetooth client
 speckle/                 Speckle interferometry pipeline
 poses/                   Saved arm configurations (.json)

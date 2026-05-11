@@ -30,8 +30,9 @@ from bless import (  # type: ignore
 
 from .ble_protocol import (
     SERVICE_UUID, CHAR_COMMAND, CHAR_STATUS, CHAR_INFO, CHAR_POSES, CHAR_LOG,
-    DEVICE_NAME, PROTOCOL_VERSION,
+    CHAR_PREVIEW, DEVICE_NAME, PROTOCOL_VERSION,
 )
+from .media import MediaBroadcaster
 from .session import TrackerSession, Command
 
 log = logging.getLogger("ble_server")
@@ -64,6 +65,10 @@ class BLEServer:
         self._last_poses_bytes: bytes = b""
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop = asyncio.Event()
+        # BLE preview char — keep a tiny JPEG ready even before media is
+        # enabled, so the client always gets *some* alignment feedback.
+        self._preview_throttle = 0.0
+        self._preview_min_interval = 0.5    # ≤2 Hz
         # Hook session log lines so they fan out over BLE
         session._log_sink = self._on_session_log
 
@@ -71,8 +76,19 @@ class BLEServer:
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
+        self.session.attach_loop(self._loop)
         self.server.read_request_func = self._on_read
         self.server.write_request_func = self._on_write
+
+        # Start the broadcaster *now* so thumbnails flow even before
+        # media-over-WS is enabled — that's the whole point of the BLE
+        # fallback path.
+        if self.session.media is None:
+            self.session.media = MediaBroadcaster(
+                capture_dir=self.session.config.capture_dir
+            )
+            await self.session.media.start()
+            self.session.media.on_thumbnail(self._on_thumbnail)
 
         await self.server.add_new_service(SERVICE_UUID)
 
@@ -93,6 +109,9 @@ class BLEServer:
         )
         await self.server.add_new_characteristic(
             SERVICE_UUID, CHAR_LOG, _NOTIFY_ONLY, b"", _PERM_R,
+        )
+        await self.server.add_new_characteristic(
+            SERVICE_UUID, CHAR_PREVIEW, _NOTIFY_ONLY, b"", _PERM_R,
         )
 
         await self.server.start()
@@ -194,6 +213,18 @@ class BLEServer:
 
     def _enqueue_log(self, line: str) -> None:
         self._log_buf.append(line[:240])
+
+    async def _on_thumbnail(self, jpeg: bytes, _meta: dict) -> None:
+        # Throttle, and drop oversize thumbnails to stay inside one MTU.
+        loop = asyncio.get_event_loop()
+        now = loop.time()
+        if now - self._preview_throttle < self._preview_min_interval:
+            return
+        if len(jpeg) > 220:
+            return  # MediaBroadcaster should keep us under, but guard anyway
+        self._preview_throttle = now
+        self._set_value(CHAR_PREVIEW, jpeg)
+        await self._notify(CHAR_PREVIEW)
 
     def _set_value(self, uuid: str, value: bytes) -> None:
         char = self.server.get_characteristic(uuid)

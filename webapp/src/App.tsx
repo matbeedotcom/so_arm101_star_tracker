@@ -8,6 +8,8 @@ import { PoseManager } from "./components/PoseManager";
 import { CalibrationPanel } from "./components/CalibrationPanel";
 import { ConfigPanel } from "./components/ConfigPanel";
 import { LogStream } from "./components/LogStream";
+import { LivePreview } from "./components/LivePreview";
+import { NetworkPanel } from "./components/NetworkPanel";
 
 export function App() {
   // Single client instance for the app lifetime.
@@ -71,14 +73,19 @@ export function App() {
         <>
           <TelemetryPanel status={status} />
 
-          <div className="grid" style={{ marginTop: 14 }}>
+          <div className="section">
+            <LivePreview client={client} status={status} />
+          </div>
+
+          <div className="grid section">
             <TargetSelector client={client} stars={targets.stars} planets={targets.planets} status={status} />
             <PoseManager client={client} poses={poses?.poses ?? []} status={status} />
             <CalibrationPanel client={client} status={status} />
             <ConfigPanel client={client} status={status} />
+            <NetworkPanel client={client} status={status} />
           </div>
 
-          <div style={{ marginTop: 14 }}>
+          <div className="section">
             <LogStream lines={logLines} onClear={() => setLogLines([])} />
           </div>
         </>

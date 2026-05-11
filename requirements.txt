@@ -34,3 +34,6 @@ python-prctl
 
 # BLE peripheral (goto_ble.py — cross-platform GATT server using BlueZ on Linux)
 bless
+
+# Image streaming server (WebSocket + HTTP) for the web client
+aiohttp

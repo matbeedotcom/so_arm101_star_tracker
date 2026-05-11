@@ -6,6 +6,7 @@ export const CHAR_STATUS  = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d103";
 export const CHAR_INFO    = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d104";
 export const CHAR_POSES   = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d105";
 export const CHAR_LOG     = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d106";
+export const CHAR_PREVIEW = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d107";
 
 export const DEVICE_NAME = "StarTracker";
 
@@ -39,6 +40,33 @@ export interface Status {
   locked_pose: string | null;
   uptime: number;
   error: string | null;
+  media: { enabled: boolean; port: number; token: string | null; path: string };
+  net: NetInterface[];
+  ap: APState;
+}
+
+export interface NetInterface {
+  name: string;
+  ip: string;
+  type: "wifi" | "eth" | "ap" | "lo" | "vpn" | "other";
+}
+
+export interface APState {
+  active: boolean;
+  ssid: string | null;
+  passphrase: string | null;
+  iface: string | null;
+  client_count: number;
+}
+
+export interface LiveFrameHeader {
+  t: number;
+  n: number;
+  exp?: number | null;
+  w?: number;
+  h?: number;
+  mime: string;
+  size: number;
 }
 
 export interface Info {
@@ -75,4 +103,8 @@ export type Command =
   | { cmd: "calibrate_pitch"; req?: number }
   | { cmd: "set_config"; req?: number; mode?: "ndof" | "imu"; exposure?: number; burst_count?: number; capture?: boolean }
   | { cmd: "reinit_hw"; req?: number }
-  | { cmd: "refresh_poses"; req?: number };
+  | { cmd: "refresh_poses"; req?: number }
+  | { cmd: "enable_media"; req?: number }
+  | { cmd: "disable_media"; req?: number }
+  | { cmd: "start_ap"; req?: number; ssid: string; passphrase: string; iface?: string }
+  | { cmd: "stop_ap"; req?: number };

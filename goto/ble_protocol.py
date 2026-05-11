@@ -24,6 +24,7 @@ CHAR_STATUS  = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d103"
 CHAR_INFO    = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d104"
 CHAR_POSES   = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d105"
 CHAR_LOG     = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d106"
+CHAR_PREVIEW = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d107"  # raw JPEG bytes, ≤220 B
 
 DEVICE_NAME = "StarTracker"
 PROTOCOL_VERSION = 1
@@ -52,6 +53,13 @@ PROTOCOL_VERSION = 1
 #   {"cmd":"reinit_hw", "req":<int>}                # re-open IMU + servos
 #   {"cmd":"refresh_poses", "req":<int>}            # force Poses notify
 #
+#   # ── Media / network (image streaming) ──
+#   {"cmd":"enable_media",  "req":<int>}            # start aiohttp WS+HTTP on :8765
+#   {"cmd":"disable_media", "req":<int>}
+#   {"cmd":"start_ap",      "req":<int>,
+#        "ssid":"StarTracker", "passphrase":"tracker-XXXX"}
+#   {"cmd":"stop_ap",       "req":<int>}
+#
 # ── Status (device → client, CHAR_STATUS, notify ~2 Hz) ──
 #
 #   {
@@ -67,8 +75,19 @@ PROTOCOL_VERSION = 1
 #     "hw": {"imu":true, "servos":true, "camera":false},
 #     "capture": {"enabled":true, "burst_count":1, "frames_captured":12},
 #     "uptime": 123.4,
-#     "error": null
+#     "error": null,
+#
+#     # Streaming endpoints — empty until enable_media:
+#     "media": {"enabled":false, "port":8765, "token":null, "path":"/live"},
+#     "net":   [{"name":"wlan0","ip":"192.168.1.42","type":"wifi"}],
+#     "ap":    {"active":false, "ssid":null, "passphrase":null,
+#               "iface":"wlan0", "client_count":0}
 #   }
+#
+# ── Preview (device → client, CHAR_PREVIEW, notify-only) ──
+#   Raw JPEG bytes, ≤220 B (fits in one ATT MTU). Throttled to ≤2 Hz.
+#   The session keeps this alive even with no Wi-Fi — it's the fallback
+#   visual feedback when bulk media streaming isn't an option.
 #
 # ── Info (device → client, CHAR_INFO, read-only) ──
 #

@@ -29,6 +29,9 @@ from typing import Any, Callable, Optional
 from astropy.coordinates import SkyCoord
 
 from . import tracker as _tracker  # for module-level `running` (SIGINT)
+from . import network as _network
+from .media import MediaBroadcaster
+from .image_server import ImageServer
 from .config import (
     OBSERVER_LAT, OBSERVER_LON, SERVO_PORT,
     MODE_IMU, MODE_NDOF, MODE_SERVO,
@@ -76,6 +79,17 @@ class TrackerSession:
         self._shutdown_evt = threading.Event()   # ends the worker thread
         self._t0 = time.monotonic()
 
+        # asyncio loop reference — set by the BLE server once it's
+        # running, so the worker thread can schedule media coroutines.
+        self._loop: "asyncio.AbstractEventLoop | None" = None
+        self.media: Optional[MediaBroadcaster] = None
+        self.image_server: Optional[ImageServer] = None
+        self._media_port = 8765
+        self._media_token: Optional[str] = None
+        self._net: list[dict] = []
+        self._ap: dict = {"active": False, "ssid": None, "passphrase": None,
+                          "iface": None, "client_count": 0}
+
         self.config = Config()
         self.observer_lat = OBSERVER_LAT
         self.observer_lon = OBSERVER_LON
@@ -107,6 +121,10 @@ class TrackerSession:
 
     # ── Public API ──
 
+    def attach_loop(self, loop) -> None:
+        """Bind the BLE asyncio loop. Required before media commands work."""
+        self._loop = loop
+
     def submit(self, cmd: Command) -> None:
         """Queue a command. Returns immediately."""
         self._cmd_q.put(cmd)
@@ -120,7 +138,21 @@ class TrackerSession:
         self._stop_evt.set()
         self._cmd_q.put(Command("__shutdown"))
         self._worker.join(timeout=10)
+        # Stop async services on the BLE loop if still attached.
+        if self.image_server is not None or self.media is not None:
+            try:
+                self._async(self._shutdown_media())
+            except Exception:
+                pass
         self._close_hw()
+
+    async def _shutdown_media(self) -> None:
+        if self.image_server is not None and self.image_server.running:
+            try: await self.image_server.stop()
+            except Exception: pass
+        if self.media is not None:
+            try: await self.media.stop()
+            except Exception: pass
 
     def snapshot(self) -> dict:
         """Latest status as a plain dict (safe to JSON-encode)."""
@@ -140,6 +172,14 @@ class TrackerSession:
         }
         s["locked_pose"] = self.locked_pose_name
         s["uptime"] = round(time.monotonic() - self._t0, 1)
+        s["media"] = {
+            "enabled": self.image_server.running if self.image_server else False,
+            "port": self._media_port,
+            "token": self._media_token,
+            "path": "/live",
+        }
+        s["net"] = list(self._net)
+        s["ap"] = dict(self._ap)
         return s
 
     def list_poses(self) -> list:
@@ -231,6 +271,14 @@ class TrackerSession:
                 self._log(f"D {cmd.req or ''} reinit_hw:ok")
             elif c == "refresh_poses":
                 self._log(f"D {cmd.req or ''} refresh_poses:ok")  # server handles notify
+            elif c == "enable_media":
+                self._async(self._do_enable_media(cmd))
+            elif c == "disable_media":
+                self._async(self._do_disable_media(cmd))
+            elif c == "start_ap":
+                self._async(self._do_start_ap(cmd))
+            elif c == "stop_ap":
+                self._async(self._do_stop_ap(cmd))
             else:
                 self._log(f"E {cmd.req or ''} unknown cmd: {c}")
         except Exception as e:
@@ -384,6 +432,67 @@ class TrackerSession:
             self.config.capture = bool(a["capture"]); changed.append(f"cap={a['capture']}")
         self._log(f"D {cmd.req or ''} set_config:{','.join(changed) or 'noop'}")
 
+    # ── Async (loop-bound) command handlers ──
+
+    def _async(self, coro) -> None:
+        """Run an asyncio coroutine on the BLE loop from this thread.
+
+        If the loop isn't attached yet (running headless without BLE),
+        we fall back to a one-shot loop just for this call.
+        """
+        import asyncio as _aio
+        if self._loop is not None and self._loop.is_running():
+            fut = _aio.run_coroutine_threadsafe(coro, self._loop)
+            try:
+                fut.result(timeout=20.0)
+            except Exception as e:
+                self._log(f"E media: {e}")
+            return
+        try:
+            _aio.run(coro)
+        except Exception as e:
+            self._log(f"E media: {e}")
+
+    async def _do_enable_media(self, cmd: Command) -> None:
+        if self.media is None:
+            self.media = MediaBroadcaster(capture_dir=self.config.capture_dir)
+            await self.media.start()
+        if self.image_server is None:
+            self.image_server = ImageServer(self.media, port=self._media_port,
+                                            bursts_dir=self.config.capture_dir)
+        if not self.image_server.running:
+            self._media_token = await self.image_server.start()
+        self._net = await _network.list_addresses_dict()
+        self._log(f"D {cmd.req or ''} enable_media:ok port={self._media_port}")
+
+    async def _do_disable_media(self, cmd: Command) -> None:
+        if self.image_server is not None and self.image_server.running:
+            await self.image_server.stop()
+        self._media_token = None
+        self._log(f"D {cmd.req or ''} disable_media:ok")
+
+    async def _do_start_ap(self, cmd: Command) -> None:
+        ssid = str(cmd.args.get("ssid") or "StarTracker")
+        passphrase = str(cmd.args.get("passphrase") or "")
+        iface = str(cmd.args.get("iface") or "wlan0")
+        ap = await _network.start_ap(ssid, passphrase, iface=iface)
+        self._ap = {
+            "active": ap.active, "ssid": ap.ssid, "passphrase": ap.passphrase,
+            "iface": ap.iface, "client_count": ap.client_count,
+        }
+        # Refresh addresses — the new AP interface will have its own IP.
+        self._net = await _network.list_addresses_dict()
+        self._log(f"D {cmd.req or ''} start_ap:{ssid}")
+
+    async def _do_stop_ap(self, cmd: Command) -> None:
+        ap = await _network.stop_ap()
+        self._ap = {
+            "active": ap.active, "ssid": None, "passphrase": None,
+            "iface": None, "client_count": 0,
+        }
+        self._net = await _network.list_addresses_dict()
+        self._log(f"D {cmd.req or ''} stop_ap:ok")
+
     # ── Hardware helpers ──
 
     def _initialize_hw(self) -> None:
@@ -441,17 +550,35 @@ class TrackerSession:
                 pass
             self.imu_bus = None
 
+    _last_net_refresh: float = 0.0
+
     def _refresh_idle_status(self) -> None:
-        if self.imu_bus is None:
-            return
+        # IMU pulse
+        if self.imu_bus is not None:
+            try:
+                imu = read_imu(self.imu_bus, samples=1)
+                gp = gravity_pitch(self.imu_bus)
+                active_mode = MODE_NDOF if self.config.mode == "ndof" else MODE_IMU
+                with self._lock:
+                    self._status["imu_heading"] = imu["heading"]
+                    self._status["imu_pitch"] = gp
+                    self._status["calib"] = calib_str(imu, active_mode)
+            except Exception:
+                pass
+        # Network refresh on a slow cadence — shells out, don't spam.
+        now = time.monotonic()
+        if now - self._last_net_refresh > 10.0:
+            self._last_net_refresh = now
+            self._async(self._refresh_network_state())
+
+    async def _refresh_network_state(self) -> None:
         try:
-            imu = read_imu(self.imu_bus, samples=1)
-            gp = gravity_pitch(self.imu_bus)
-            active_mode = MODE_NDOF if self.config.mode == "ndof" else MODE_IMU
-            with self._lock:
-                self._status["imu_heading"] = imu["heading"]
-                self._status["imu_pitch"] = gp
-                self._status["calib"] = calib_str(imu, active_mode)
+            self._net = await _network.list_addresses_dict()
+            ap = await _network.ap_state()
+            self._ap = {
+                "active": ap.active, "ssid": ap.ssid, "passphrase": ap.passphrase,
+                "iface": ap.iface, "client_count": ap.client_count,
+            }
         except Exception:
             pass
 
