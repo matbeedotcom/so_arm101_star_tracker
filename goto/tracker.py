@@ -9,6 +9,8 @@ from .config import (
     MOVE_SPEED, TRACK_SPEED, TOLERANCE_DEG,
     SLEW_SETTLE, TRACK_INTERVAL, TRACK_SETTLE,
     MODE_IMU, angle_diff,
+    ACHIEVABLE_ALT_MIN, ACHIEVABLE_ALT_MAX,
+    SLEW_MAX_ITERATIONS, SLEW_NO_PROGRESS_LIMIT, SLEW_MIN_IMPROVEMENT,
 )
 from .imu import read_imu, calib_str, gravity_pitch
 from .servos import read_servo, wait_all_stopped
@@ -103,6 +105,10 @@ def slew_to_target(target_info, imu_bus, ph, pkt, strategy,
                     should_stop=None, status_cb=None):
     """Initial slew to get close to the target.
 
+    Raises ValueError if the target altitude is outside the arm's
+    achievable envelope — pre-empting 50 iterations of pointless grinding
+    against a joint limit.
+
     Optional hooks for remote control:
         should_stop(): -> bool, called per iteration. Defaults to the module
                        `running` flag so CLI Ctrl+C still works.
@@ -113,9 +119,28 @@ def slew_to_target(target_info, imu_bus, ph, pkt, strategy,
     if should_stop is None:
         should_stop = lambda: not running  # noqa: E731
 
-    best_error = float('inf')
+    # Reachability gate. Before this, alt=1° targets would grind the arm
+    # against its pitch limit for 50 iterations and converge to a 46°
+    # error.
+    target_alt0, target_az0 = compute_altaz(target_info)
+    if target_alt0 < ACHIEVABLE_ALT_MIN:
+        raise ValueError(
+            f"target alt {target_alt0:.1f}° below arm envelope "
+            f"(min {ACHIEVABLE_ALT_MIN}°)"
+        )
+    if target_alt0 > ACHIEVABLE_ALT_MAX:
+        raise ValueError(
+            f"target alt {target_alt0:.1f}° above arm envelope "
+            f"(max {ACHIEVABLE_ALT_MAX}°)"
+        )
 
-    for iteration in range(50):
+    # Per-slew transient state on the strategy (stalls, saturation).
+    strategy.reset_slew()
+
+    best_error = float('inf')
+    iters_since_progress = 0
+
+    for iteration in range(SLEW_MAX_ITERATIONS):
         if should_stop():
             return False
 
@@ -142,8 +167,6 @@ def slew_to_target(target_info, imu_bus, ph, pkt, strategy,
                 'total_err': total_error, 'calib': calib_str(imu, active_mode),
             })
 
-        best_error = min(best_error, total_error)
-
         if total_error < TOLERANCE_DEG:
             print(f"  Slew complete — error {total_error:.2f}°")
             if pipeline:
@@ -153,13 +176,31 @@ def slew_to_target(target_info, imu_bus, ph, pkt, strategy,
                     print(f"  First light captured in {elapsed:.1f}s")
             return True
 
+        # Convergence bookkeeping: did we improve enough to count as
+        # progress? If the error plateaus, the system has hit its
+        # mechanical envelope or the IMU is bouncing — either way,
+        # iterating further just chatters.
+        if best_error - total_error >= SLEW_MIN_IMPROVEMENT:
+            best_error = total_error
+            iters_since_progress = 0
+        else:
+            iters_since_progress += 1
+            if iters_since_progress >= SLEW_NO_PROGRESS_LIMIT:
+                print(f"  Slew plateaued at {total_error:.2f}° "
+                      f"(best {best_error:.2f}°, "
+                      f"{iters_since_progress} iters without progress); "
+                      f"switching to tracking.")
+                return True
+            best_error = min(best_error, total_error)
+
         # Ramp gain
         gain = min(0.6, total_error / 50.0 + 0.15)
         strategy.apply_correction(az_error, alt_error, gain, MOVE_SPEED,
                                    ph, pkt, imu_bus)
         time.sleep(SLEW_SETTLE)
 
-    print(f"  Slew did not fully converge (best {best_error:.2f}°), switching to tracking.")
+    print(f"  Slew did not fully converge after {SLEW_MAX_ITERATIONS} iters "
+          f"(best {best_error:.2f}°), switching to tracking.")
     return True
 
 

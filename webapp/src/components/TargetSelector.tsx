@@ -1,8 +1,9 @@
 import { useState } from "react";
 import type { StarTrackerClient } from "../ble";
 import type { Status } from "../protocol";
+import { SkyMap, type SkySelection } from "./SkyMap";
 
-type Mode = "named" | "radec" | "altaz";
+type Mode = "sky" | "radec" | "altaz";
 
 export function TargetSelector({
   client, stars, planets, status,
@@ -12,8 +13,8 @@ export function TargetSelector({
   planets: string[];
   status: Status | null;
 }) {
-  const [mode, setMode] = useState<Mode>("named");
-  const [target, setTarget] = useState<string>("polaris");
+  const [mode, setMode] = useState<Mode>("sky");
+  const [selection, setSelection] = useState<SkySelection | null>(null);
   const [ra, setRa] = useState("5h55m10s");
   const [dec, setDec] = useState("+7d24m25s");
   const [alt, setAlt] = useState("45");
@@ -21,6 +22,7 @@ export function TargetSelector({
   const [busy, setBusy] = useState(false);
 
   const slewing = status?.state === "slewing" || status?.state === "tracking";
+  const observer = status?.observer ?? { lat: 43.65, lon: -79.38 };
 
   async function send(payload: Record<string, unknown>) {
     setBusy(true);
@@ -28,32 +30,45 @@ export function TargetSelector({
     finally { setBusy(false); }
   }
   async function go() {
-    if (mode === "named") return send({ target });
+    if (mode === "sky") {
+      if (!selection) return;
+      if (selection.kind === "body") return send({ target: selection.name });
+      return send({ alt: selection.alt, az: selection.az });
+    }
     if (mode === "radec") return send({ ra, dec });
     return send({ alt: parseFloat(alt), az: parseFloat(az) });
   }
+
+  const canGo = (() => {
+    if (busy) return false;
+    if (mode === "sky") return selection != null;
+    if (mode === "radec") return ra.trim().length > 0 && dec.trim().length > 0;
+    return !Number.isNaN(parseFloat(alt)) && !Number.isNaN(parseFloat(az));
+  })();
 
   return (
     <div className="card">
       <h2>Target</h2>
 
       <div className="row" style={{ marginBottom: 10 }}>
-        <ModeBtn current={mode} value="named" setMode={setMode}>Named</ModeBtn>
+        <ModeBtn current={mode} value="sky"   setMode={setMode}>Sky map</ModeBtn>
         <ModeBtn current={mode} value="radec" setMode={setMode}>RA / Dec</ModeBtn>
         <ModeBtn current={mode} value="altaz" setMode={setMode}>Alt / Az</ModeBtn>
       </div>
 
-      {mode === "named" && (
-        <div className="col">
-          <select value={target} onChange={(e) => setTarget(e.target.value)} style={{ width: "100%" }}>
-            <optgroup label="Solar system">
-              {planets.map((p) => <option key={p} value={p}>{p}</option>)}
-            </optgroup>
-            <optgroup label="Stars">
-              {stars.map((s) => <option key={s} value={s}>{s}</option>)}
-            </optgroup>
-          </select>
-        </div>
+      {mode === "sky" && (
+        <SkyMap
+          observerLat={observer.lat}
+          observerLon={observer.lon}
+          stars={stars}
+          planets={planets}
+          currentAlt={status?.imu_pitch ?? null}
+          currentAz={status?.imu_heading ?? null}
+          targetAlt={status?.target_alt ?? null}
+          targetAz={status?.target_az ?? null}
+          selected={selection}
+          onSelect={setSelection}
+        />
       )}
 
       {mode === "radec" && (
@@ -89,7 +104,7 @@ export function TargetSelector({
       <hr className="hr" />
 
       <div className="row">
-        <button className="primary" onClick={go} disabled={busy} style={{ flex: 1 }}>
+        <button className="primary" onClick={go} disabled={!canGo} style={{ flex: 1 }}>
           {slewing ? "Re-target" : "Go"}
         </button>
         <button className="danger" onClick={() => client.send({ cmd: "stop" })} disabled={!slewing}>

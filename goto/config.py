@@ -80,8 +80,38 @@ PITCH_MAX_STEP = 200
 
 # IMU-to-servo gains (measured)
 TICKS_PER_DEG_ROTATION = 150 / 12.9   # ~11.6 ticks/deg
-TICKS_PER_DEG_PITCH = 150 / 13.3      # ~11.3 ticks/deg
+TICKS_PER_DEG_PITCH = 150 / 13.3      # ~11.3 ticks/deg — legacy single-joint
 WHEEL_TICKS_PER_DEG = 35.0
+
+# Per-joint pitch leverage (ticks per degree of camera-pitch contribution).
+# Each pitch joint has a different mechanical advantage on the camera angle,
+# so a single constant blew up the inverse map. Shoulder pitch has the
+# biggest lever (small ticks per degree); wrist pitch the smallest.
+# These are empirical defaults — calibrate with a per-joint sweep for
+# better accuracy. The WRIST_PITCH entry is overridden by pitch_cal.json.
+PITCH_TICKS_PER_DEG = {
+    SHOULDER_PITCH: 5.0,
+    ELBOW:          8.0,
+    WRIST_PITCH:    TICKS_PER_DEG_PITCH,
+}
+
+# Control deadbands — sub-degree corrections aren't worth the chatter.
+AZ_DEADBAND_DEG   = 1.0    # Skip azimuth correction below this error.
+AZ_WHEEL_MIN_DEG  = 3.0    # Only fall back to wheels for moves ≥ this.
+ALT_DEADBAND_DEG  = 0.5    # Skip altitude correction below this error.
+
+# Achievable altitude envelope (degrees). Targets outside this range
+# are rejected before the slew loop — the arm can't physically reach
+# them, so iterating burns time and grinds servos against limits. Tune
+# for your actual mechanical reach; raise the floor if your linkage
+# can't get below ~10° elevation.
+ACHIEVABLE_ALT_MIN = 10.0
+ACHIEVABLE_ALT_MAX = 80.0
+
+# Slew convergence — stop iterating when error plateaus.
+SLEW_MAX_ITERATIONS    = 18    # Hard cap; loop usually exits earlier.
+SLEW_NO_PROGRESS_LIMIT = 4     # Iters without ≥SLEW_MIN_IMPROVEMENT → bail.
+SLEW_MIN_IMPROVEMENT   = 0.5   # Degrees of total-error reduction per iter.
 
 # IMU stability thresholds
 IMU_STABLE_THRESHOLD = 0.15
