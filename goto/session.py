@@ -183,41 +183,56 @@ class TrackerSession:
             except Exception: pass
 
     def snapshot(self) -> dict:
-        """High-frequency status — small enough to fit a BLE notification.
+        """High-frequency tick state — must stay under the BLE ATT MTU.
 
-        Long-tail / slow-changing state lives in ``network_snapshot`` and
-        ``schedule_snapshot`` (separate BLE characteristics) so each
-        update stays under the negotiated ATT MTU.
+        Slow-changing fields (hw, observer, media, live_preview, …) are
+        emitted via ``config_snapshot`` on its own characteristic;
+        ``net``/``ap`` and ``schedule``/``suggestion`` likewise. The web
+        client merges them into a single Status object for the UI.
         """
         with self._lock:
             s = dict(self._status)
         s["v"] = 1
-        s["observer"] = {"lat": self.observer_lat, "lon": self.observer_lon}
-        s["mode"] = self.config.mode
-        s["hw"] = {
-            "imu": self.imu_bus is not None,
-            "servos": self.ph is not None,
-            "camera": self.cam is not None,
-        }
-        s["capture"] = {
-            "enabled": self.config.capture and self.pipeline is not None,
-            "burst_count": self.config.burst_count,
-        }
-        s["locked_pose"] = self.locked_pose_name
         s["uptime"] = round(time.monotonic() - self._t0, 1)
-        s["media"] = {
-            "enabled": self.image_server.running if self.image_server else False,
-            "port": self._media_port,
-            "token": self._media_token,
-            "path": "/live",
-        }
-        s["live_preview"] = (
+        return s
+
+    def config_snapshot(self) -> dict:
+        """Slow-changing hw + config state. Notified only on change."""
+        lp = (
             self.live_camera.status() if self.live_camera is not None
             else {"active": False, "available": False, "fps_target": 0,
                   "fps_actual": 0.0, "w": 0, "h": 0, "exposure_us": 0,
                   "frames": 0, "import_error": None}
         )
-        return s
+        # Round fps_actual so live preview running at 9.4/9.6/9.8 doesn't
+        # cause this characteristic to fire every tick. Drop the running
+        # frame counter for the same reason — it's just internal stats.
+        lp = dict(lp)
+        if "fps_actual" in lp:
+            lp["fps_actual"] = round(float(lp["fps_actual"]))
+        lp.pop("frames", None)
+        return {
+            "v": 1,
+            "observer": {"lat": self.observer_lat, "lon": self.observer_lon},
+            "mode": self.config.mode,
+            "hw": {
+                "imu": self.imu_bus is not None,
+                "servos": self.ph is not None,
+                "camera": self.cam is not None,
+            },
+            "capture": {
+                "enabled": self.config.capture and self.pipeline is not None,
+                "burst_count": self.config.burst_count,
+            },
+            "locked_pose": self.locked_pose_name,
+            "media": {
+                "enabled": self.image_server.running if self.image_server else False,
+                "port": self._media_port,
+                "token": self._media_token,
+                "path": "/live",
+            },
+            "live_preview": lp,
+        }
 
     def network_snapshot(self) -> dict:
         return {"v": 1, "net": list(self._net), "ap": dict(self._ap)}

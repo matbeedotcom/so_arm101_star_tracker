@@ -14,8 +14,10 @@ import {
   CHAR_PREVIEW,
   CHAR_NETWORK,
   CHAR_SCHEDULE,
+  CHAR_CONFIG,
   DEVICE_NAME,
   type Command,
+  type ConfigPayload,
   type Info,
   type NetworkPayload,
   type PosesPayload,
@@ -41,22 +43,37 @@ export class StarTrackerClient {
     preview?: BluetoothRemoteGATTCharacteristic;
     network?: BluetoothRemoteGATTCharacteristic;
     schedule?: BluetoothRemoteGATTCharacteristic;
+    config?: BluetoothRemoteGATTCharacteristic;
   } = {};
 
   // Latest payloads of the secondary characteristics — merged into the
   // Status object so existing components stay unaware of the split.
   private _latestNetwork: NetworkPayload = { v: 1, net: [], ap: { active: false, ssid: null, passphrase: null, iface: null, client_count: 0 } };
   private _latestSchedule: SchedulePayload = { v: 1, schedule: [], suggestion: null };
+  private _latestConfig: ConfigPayload | null = null;
   private _latestStatus: Status | null = null;
 
   /** Apply newly received Status (or null to re-emit merged) to listeners. */
-  private _emitStatus(raw: Status | null): void {
-    if (raw) this._latestStatus = raw;
+  private _emitStatus(raw: Partial<Status> | null): void {
+    if (raw) {
+      this._latestStatus = { ...(this._latestStatus ?? {} as Status), ...raw };
+    }
     if (!this._latestStatus) return;
+    const c = this._latestConfig;
     const merged: Status = {
       ...this._latestStatus,
+      // Slow-changing fields from CHAR_CONFIG
+      observer: c?.observer ?? this._latestStatus.observer,
+      mode: c?.mode ?? this._latestStatus.mode,
+      hw: c?.hw ?? this._latestStatus.hw,
+      capture: c?.capture ?? this._latestStatus.capture,
+      locked_pose: c?.locked_pose ?? this._latestStatus.locked_pose,
+      media: c?.media ?? this._latestStatus.media,
+      live_preview: c?.live_preview ?? this._latestStatus.live_preview,
+      // Network from CHAR_NETWORK
       net: this._latestNetwork.net,
       ap: this._latestNetwork.ap,
+      // Schedule + suggestion from CHAR_SCHEDULE
       schedule: this._latestSchedule.schedule,
       suggestion: this._latestSchedule.suggestion,
     };
@@ -113,6 +130,7 @@ export class StarTrackerClient {
     try { this.chars.preview  = await this.service.getCharacteristic(CHAR_PREVIEW); }  catch {}
     try { this.chars.network  = await this.service.getCharacteristic(CHAR_NETWORK); }  catch {}
     try { this.chars.schedule = await this.service.getCharacteristic(CHAR_SCHEDULE); } catch {}
+    try { this.chars.config   = await this.service.getCharacteristic(CHAR_CONFIG); }   catch {}
 
     this.chars.status.addEventListener("characteristicvaluechanged", (e) => {
       const v = (e.target as BluetoothRemoteGATTCharacteristic).value;
@@ -163,6 +181,19 @@ export class StarTrackerClient {
       try { await this.chars.schedule.startNotifications(); } catch {/* skip */}
     }
 
+    // Config — slow-changing hw + config snapshot.
+    if (this.chars.config) {
+      this.chars.config.addEventListener("characteristicvaluechanged", (e) => {
+        const v = (e.target as BluetoothRemoteGATTCharacteristic).value;
+        if (!v) return;
+        try {
+          this._latestConfig = JSON.parse(td.decode(v)) as ConfigPayload;
+          this._emitStatus(null);
+        } catch {/* skip */}
+      });
+      try { await this.chars.config.startNotifications(); } catch {/* skip */}
+    }
+
     await this.chars.status.startNotifications();
     await this.chars.poses.startNotifications();
     await this.chars.log.startNotifications();
@@ -193,6 +224,10 @@ export class StarTrackerClient {
     try {
       const v = await this.chars.schedule?.readValue();
       if (v) this._latestSchedule = JSON.parse(td.decode(v)) as SchedulePayload;
+    } catch {/* optional */}
+    try {
+      const v = await this.chars.config?.readValue();
+      if (v) this._latestConfig = JSON.parse(td.decode(v)) as ConfigPayload;
     } catch {/* optional */}
     try {
       const v = await this.chars.status?.readValue();

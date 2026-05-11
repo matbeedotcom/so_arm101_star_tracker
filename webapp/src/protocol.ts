@@ -9,6 +9,7 @@ export const CHAR_LOG     = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d106";
 export const CHAR_PREVIEW  = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d107";
 export const CHAR_NETWORK  = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d108";
 export const CHAR_SCHEDULE = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d109";
+export const CHAR_CONFIG   = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d10a";
 
 export const DEVICE_NAME = "StarTracker";
 
@@ -62,6 +63,18 @@ export interface SchedulePayload {
   v: number;
   schedule: ScheduledJob[];
   suggestion: Suggestion | null;
+}
+
+/** Raw payload of CHAR_CONFIG. */
+export interface ConfigPayload {
+  v: number;
+  observer: { lat: number; lon: number };
+  mode: "ndof" | "imu";
+  hw: { imu: boolean; servos: boolean; camera: boolean };
+  capture: { enabled: boolean; burst_count: number };
+  locked_pose: string | null;
+  media: { enabled: boolean; port: number; token: string | null; path: string };
+  live_preview: LivePreviewState;
 }
 
 export interface ScheduledJob {

@@ -27,6 +27,7 @@ CHAR_LOG     = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d106"
 CHAR_PREVIEW  = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d107"  # raw JPEG bytes, ≤220 B
 CHAR_NETWORK  = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d108"  # net + ap (notify on change)
 CHAR_SCHEDULE = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d109"  # schedule + suggestion
+CHAR_CONFIG   = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d10a"  # slow-changing hw/config
 
 DEVICE_NAME = "StarTracker"
 PROTOCOL_VERSION = 1

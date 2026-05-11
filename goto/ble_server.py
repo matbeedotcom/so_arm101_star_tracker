@@ -30,7 +30,7 @@ from bless import (  # type: ignore
 
 from .ble_protocol import (
     SERVICE_UUID, CHAR_COMMAND, CHAR_STATUS, CHAR_INFO, CHAR_POSES, CHAR_LOG,
-    CHAR_PREVIEW, CHAR_NETWORK, CHAR_SCHEDULE,
+    CHAR_PREVIEW, CHAR_NETWORK, CHAR_SCHEDULE, CHAR_CONFIG,
     DEVICE_NAME, PROTOCOL_VERSION,
 )
 from .media import MediaBroadcaster
@@ -66,6 +66,7 @@ class BLEServer:
         self._last_poses_bytes: bytes = b""
         self._last_network_bytes: bytes = b""
         self._last_schedule_bytes: bytes = b""
+        self._last_config_bytes: bytes = b""
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop = asyncio.Event()
         # BLE preview char — keep a tiny JPEG ready even before media is
@@ -150,6 +151,10 @@ class BLEServer:
         await self.server.add_new_characteristic(
             SERVICE_UUID, CHAR_SCHEDULE, _READ_NOTIFY,
             json.dumps(self.session.schedule_snapshot()).encode(), _PERM_R,
+        )
+        await self.server.add_new_characteristic(
+            SERVICE_UUID, CHAR_CONFIG, _READ_NOTIFY,
+            json.dumps(self.session.config_snapshot()).encode(), _PERM_R,
         )
 
         await self.server.start()
@@ -236,6 +241,15 @@ class BLEServer:
                     self._set_value(CHAR_SCHEDULE, sched_payload)
                     await self._notify(CHAR_SCHEDULE)
                     self._last_schedule_bytes = sched_payload
+
+                # Config — hw / observer / media / live_preview meta.
+                cfg_payload = json.dumps(
+                    self.session.config_snapshot(), separators=(",", ":"),
+                ).encode()
+                if cfg_payload != self._last_config_bytes:
+                    self._set_value(CHAR_CONFIG, cfg_payload)
+                    await self._notify(CHAR_CONFIG)
+                    self._last_config_bytes = cfg_payload
 
                 # Drain log buffer
                 while self._log_buf:
