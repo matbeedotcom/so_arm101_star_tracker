@@ -247,8 +247,16 @@ class WristOnlyStrategy(MotionStrategy):
 
         lo, hi = JOINT_LIMITS[SHOULDER_ROT]
         needed_ticks = int(az_deg * TICKS_PER_DEG_ROTATION)
-        new_pos = current_rot + needed_ticks
         min_t = get_min_ticks(SHOULDER_ROT, speed)
+
+        # Round sub-min-tick demands up to min-tick. Otherwise low-gain
+        # track-mode corrections deadlock: the gained command is too
+        # small for the servo and also too small for the wheel fallback,
+        # so nothing happens iteration after iteration.
+        if 0 < abs(needed_ticks) < min_t:
+            needed_ticks = min_t * (1 if needed_ticks >= 0 else -1)
+
+        new_pos = current_rot + needed_ticks
         in_range = (lo + self.shoulder_margin) <= new_pos <= (hi - self.shoulder_margin)
 
         # Shoulder rotation is fine — issue the move and let the shared
@@ -336,10 +344,21 @@ class WristOnlyStrategy(MotionStrategy):
             demand_ticks = int(demand_deg * tpd) * motor_dir[sid]
             # Per-iteration ramp limit; bigger demand is split over iters.
             step_ticks = max(-PITCH_MAX_STEP, min(PITCH_MAX_STEP, demand_ticks))
+
+            # Round sub-min-tick demands up to min-tick before clamping.
+            # Without this, low-gain corrections crush below servo
+            # resolution and the loop deadlocks. The ~0.1° overshoot from
+            # rounding is harmless — next iter dials it back.
+            min_t = get_min_ticks(sid, speed)
+            if 0 < abs(step_ticks) < min_t:
+                step_ticks = min_t * (1 if step_ticks >= 0 else -1)
+
             target = max(lo, min(hi, positions[sid] + step_ticks))
             actual_ticks = target - positions[sid]
 
-            min_t = get_min_ticks(sid, speed)
+            # If joint-limit clamping drove the actual move below
+            # min-tick, the joint is effectively saturated — zero it
+            # out so the cascade spills to the next stage.
             if 0 < abs(actual_ticks) < min_t:
                 actual_ticks = 0
                 target = positions[sid]
