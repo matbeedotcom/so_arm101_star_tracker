@@ -24,10 +24,12 @@ from .imu import read_imu
 _PITCH_JOINTS = (SHOULDER_PITCH, ELBOW, WRIST_PITCH)
 _PITCH_LABELS = {SHOULDER_PITCH: 'ShPit', ELBOW: 'Elb', WRIST_PITCH: 'WPt'}
 
-# Base allocation weights across pitch joints. Shoulder is biased highest
-# because it has the most mechanical advantage; ratio is renormalised
-# over the currently-active set so saturated joints redistribute cleanly.
-_PITCH_WEIGHTS = {SHOULDER_PITCH: 0.4, ELBOW: 0.3, WRIST_PITCH: 0.3}
+# Cascade-stage ordering for "scorpion tail" pitch allocation. Each
+# stage tries to absorb the residual demand; remaining demand spills to
+# the next stage only when the current joint hits its hardware limit.
+# Putting wrist first keeps the upper arm folded and the elbow tucked,
+# rather than extending the arm horizontally to reach a low target.
+_PITCH_CASCADE = (WRIST_PITCH, SHOULDER_PITCH, ELBOW)
 
 
 class MotionStrategy(ABC):
@@ -282,15 +284,27 @@ class WristOnlyStrategy(MotionStrategy):
     # ── Altitude ──
 
     def _command_altitude(self, desired_pitch, speed, ph, pkt):
-        """Distribute desired pitch across the three pitch joints.
+        """Wrist-first pitch allocation ("scorpion tail" posture).
 
-        Active set excludes joints that are saturated (gave up earlier
-        this slew) or already at their limit in the requested direction.
-        Per-joint ticks-per-deg differ because each joint has a different
-        mechanical lever on the camera pitch.
+        The cascade is wrist → shoulder → elbow. Each stage absorbs as
+        much of the residual demand as it can without spilling, then
+        passes the leftover only when its joint hits a hardware limit.
+        Demand the per-iteration cap can't move *yet* is deferred to the
+        next iteration on the same joint — not spilled — so the arm
+        doesn't unfold prematurely.
+
+        Net effect: routine altitude moves stay on the wrist while
+        shoulder/elbow remain near their folded/upright positions.
+        Shoulder pitches in only when wrist saturates; elbow extends
+        only when both wrist and shoulder are saturated.
         """
         if self.wrist_pitch_dir is None:
             print(f"    [alt] pitch_dir not calibrated, skipping")
+            return False
+
+        positions = {sid: read_servo(ph, pkt, sid) for sid in _PITCH_JOINTS}
+        if any(v is None for v in positions.values()):
+            print(f"    [alt] Can't read servos: {positions}")
             return False
 
         pitch_dir = self.wrist_pitch_dir
@@ -301,51 +315,53 @@ class WristOnlyStrategy(MotionStrategy):
             WRIST_PITCH: pitch_dir,
         }
 
-        positions = {sid: read_servo(ph, pkt, sid) for sid in _PITCH_JOINTS}
-        if any(v is None for v in positions.values()):
-            print(f"    [alt] Can't read servos: {positions}")
-            return False
+        commanded = {sid: (positions[sid], 0) for sid in _PITCH_JOINTS}
+        cascade_path = []
+        remaining_deg = desired_pitch
 
-        # Pick the active set: not saturated, and has headroom in the
-        # commanded direction.
-        active = []
-        for sid in _PITCH_JOINTS:
+        def try_absorb(sid, demand_deg):
+            """Try to absorb demand_deg on joint `sid`.
+
+            Returns leftover demand in degrees. Zero means the joint
+            took the demand (or the per-iter cap deferred it to next
+            iter — same outcome from the cascade's perspective).
+            Non-zero means the joint hit a hardware limit and we should
+            spill into the next stage.
+            """
             if sid in self._saturated:
-                continue
-            lo, hi = JOINT_LIMITS[sid]
-            sign_on_joint = 1 if (desired_pitch * motor_dir[sid]) > 0 else -1
-            headroom = (hi - positions[sid]) if sign_on_joint > 0 else (positions[sid] - lo)
-            if headroom < 5:
-                continue
-            active.append(sid)
-
-        if not active:
-            print(f"    [alt] No active pitch joints (saturated or at limit)")
-            return False
-
-        # Renormalise base weights over the active set.
-        total_w = sum(_PITCH_WEIGHTS[s] for s in active)
-        shares = {s: (_PITCH_WEIGHTS[s] / total_w if s in active else 0.0)
-                  for s in _PITCH_JOINTS}
-
-        # Compute per-joint commands.
-        commanded = {}
-        for sid in _PITCH_JOINTS:
-            if shares[sid] == 0:
-                commanded[sid] = (positions[sid], 0)
-                continue
+                return demand_deg
             tpd = self.ticks_per_deg.get(sid, TICKS_PER_DEG_PITCH)
-            delta = int(desired_pitch * shares[sid] * tpd) * motor_dir[sid]
-            delta = max(-PITCH_MAX_STEP, min(PITCH_MAX_STEP, delta))
-            # Drop below-resolution moves rather than padding them — padding
-            # was hiding stalls.
-            min_t = get_min_ticks(sid, speed)
-            if 0 < abs(delta) < min_t:
-                delta = 0
             lo, hi = JOINT_LIMITS[sid]
-            target = max(lo, min(hi, positions[sid] + delta))
-            actual_delta = target - positions[sid]
-            commanded[sid] = (target, actual_delta)
+
+            demand_ticks = int(demand_deg * tpd) * motor_dir[sid]
+            # Per-iteration ramp limit; bigger demand is split over iters.
+            step_ticks = max(-PITCH_MAX_STEP, min(PITCH_MAX_STEP, demand_ticks))
+            target = max(lo, min(hi, positions[sid] + step_ticks))
+            actual_ticks = target - positions[sid]
+
+            min_t = get_min_ticks(sid, speed)
+            if 0 < abs(actual_ticks) < min_t:
+                actual_ticks = 0
+                target = positions[sid]
+
+            commanded[sid] = (target, actual_ticks)
+            if actual_ticks != 0:
+                cascade_path.append(_PITCH_LABELS[sid])
+
+            # If joint limits clamped the step, spill the unfittable
+            # remainder. If the per-iter cap is the only thing holding us
+            # back, future iterations will keep absorbing on this joint —
+            # don't unfold the next stage.
+            clamped_by_limit = abs(actual_ticks) < abs(step_ticks)
+            if clamped_by_limit and tpd > 0:
+                consumed_deg = (actual_ticks / tpd) * motor_dir[sid]
+                return demand_deg - consumed_deg
+            return 0.0
+
+        for sid in _PITCH_CASCADE:
+            if abs(remaining_deg) < 0.1:
+                break
+            remaining_deg = try_absorb(sid, remaining_deg)
 
         # One-line summary
         parts = []
@@ -355,8 +371,10 @@ class WristOnlyStrategy(MotionStrategy):
                 parts.append(f"{_PITCH_LABELS[sid]}: {positions[sid]}->{tgt} ({d:+d})")
         sat = sorted(self._saturated)
         sat_str = f"  [saturated: {','.join(str(s) for s in sat)}]" if sat else ""
+        path_str = f" [{'→'.join(cascade_path)}]" if cascade_path else ""
         if parts:
-            print(f"  {'  '.join(parts)}  [pitch={desired_pitch:+.1f}°]{sat_str}")
+            print(f"  {'  '.join(parts)}  [pitch={desired_pitch:+.1f}°]"
+                  f"{path_str}{sat_str}")
         else:
             print(f"  [alt] All deltas below min-tick "
                   f"(pitch={desired_pitch:+.2f}°){sat_str}")
