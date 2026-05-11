@@ -90,6 +90,15 @@ class BLEServer:
             await self.session.media.start()
             self.session.media.on_thumbnail(self._on_thumbnail)
 
+        # Session's _initialize_hw may have already run on the worker
+        # thread before media existed; opportunistically start the
+        # picamera2 preview now that the broadcaster is wired.
+        if not self.session.config.capture and self.session.cam is None:
+            try:
+                await self.session._ensure_live_camera()
+            except Exception:
+                log.exception("ensure_live_camera failed")
+
         await self.server.add_new_service(SERVICE_UUID)
 
         await self.server.add_new_characteristic(

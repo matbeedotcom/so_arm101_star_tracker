@@ -43,6 +43,18 @@ export interface Status {
   media: { enabled: boolean; port: number; token: string | null; path: string };
   net: NetInterface[];
   ap: APState;
+  live_preview: LivePreviewState;
+}
+
+export interface LivePreviewState {
+  active: boolean;        // pull loop running
+  available: boolean;     // picamera2 importable
+  fps_target: number;
+  fps_actual: number;
+  w: number;
+  h: number;
+  exposure_us: number;
+  frames: number;
 }
 
 export interface NetInterface {
@@ -107,4 +119,6 @@ export type Command =
   | { cmd: "enable_media"; req?: number }
   | { cmd: "disable_media"; req?: number }
   | { cmd: "start_ap"; req?: number; ssid: string; passphrase: string; iface?: string }
-  | { cmd: "stop_ap"; req?: number };
+  | { cmd: "stop_ap"; req?: number }
+  | { cmd: "live_start"; req?: number }
+  | { cmd: "live_stop"; req?: number };

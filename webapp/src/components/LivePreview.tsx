@@ -74,32 +74,57 @@ export function LivePreview({
 
   const isLive = mediaState === "live" && liveUrl;
   const mediaEnabled = status?.media.enabled ?? false;
+  const live = status?.live_preview;
 
   return (
     <div className="card">
       <h2>
         Live preview
-        <span style={{ float: "right", display: "flex", gap: 8, alignItems: "center" }}>
+        <span className="preview-toolbar">
           {isLive && (
             <span className="chip chip-tracking" title={candidate?.url}>
               live · {liveHeader?.w}×{liveHeader?.h}
             </span>
           )}
-          {!isLive && thumbUrl && (
+          {!isLive && live?.active && (
+            <span className="chip chip-idle" title="picamera2 streaming via broadcaster">
+              picam · {live.fps_actual.toFixed(1)} fps
+            </span>
+          )}
+          {!isLive && !live?.active && thumbUrl && (
             <span className="chip chip-idle">BLE · thumb</span>
           )}
-          {!mediaEnabled && (
+          {live && !live.active && live.available && status?.hw.camera === false && (
             <button
+              type="button"
+              className="btn-mini"
+              onClick={() => client.send({ cmd: "live_start" })}
+            >
+              Start picam
+            </button>
+          )}
+          {live?.active && (
+            <button
+              type="button"
+              className="btn-mini"
+              onClick={() => client.send({ cmd: "live_stop" })}
+            >
+              Stop picam
+            </button>
+          )}
+          {!mediaEnabled ? (
+            <button
+              type="button"
+              className="btn-mini"
               onClick={() => client.send({ cmd: "enable_media" })}
-              style={{ padding: "3px 10px", fontSize: 11 }}
             >
               Enable stream
             </button>
-          )}
-          {mediaEnabled && (
+          ) : (
             <button
+              type="button"
+              className="btn-mini"
               onClick={() => client.send({ cmd: "disable_media" })}
-              style={{ padding: "3px 10px", fontSize: 11 }}
             >
               Disable
             </button>
@@ -115,8 +140,10 @@ export function LivePreview({
         ) : (
           <div className="preview-empty">
             <div className="muted">No frames yet.</div>
-            <div className="faint" style={{ fontSize: 12, marginTop: 4 }}>
-              Capture a burst (or enable media stream) to see imagery.
+            <div className="faint preview-empty-hint">
+              {live?.available
+                ? "Start picam preview, or capture a burst to see imagery."
+                : "Capture a burst (or enable media stream) to see imagery."}
             </div>
           </div>
         )}
@@ -129,15 +156,18 @@ export function LivePreview({
             {liveHeader.exp ? ` · ${liveHeader.exp}µs` : ""}
             {" · "}{(liveHeader.size / 1024).toFixed(1)} KB
             {" · "}{new Date(liveHeader.t * 1000).toLocaleTimeString()}
+            {live?.active && <> · picam {live.w}×{live.h} @ {live.fps_actual.toFixed(1)}fps</>}
           </>
         ) : mediaEnabled && candidate ? (
           <>
             connecting to {candidate.url}
             {mediaState === "reconnecting" && " (retrying…)"}
-            {mediaError && <span style={{ color: "var(--err)" }}> · {mediaError}</span>}
+            {mediaError && <span className="err-inline"> · {mediaError}</span>}
           </>
         ) : mediaEnabled && !candidate ? (
           <>media enabled but no reachable IP — start a hotspot or join the same network</>
+        ) : live?.active ? (
+          <>picam streaming · enable media stream to view full frames in this browser</>
         ) : (
           <>BLE preview only · enable the stream for full-resolution frames</>
         )}

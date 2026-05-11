@@ -59,6 +59,8 @@ PROTOCOL_VERSION = 1
 #   {"cmd":"start_ap",      "req":<int>,
 #        "ssid":"StarTracker", "passphrase":"tracker-XXXX"}
 #   {"cmd":"stop_ap",       "req":<int>}
+#   {"cmd":"live_start",    "req":<int>}            # picamera2 low-res stream
+#   {"cmd":"live_stop",     "req":<int>}            # release camera
 #
 # ── Status (device → client, CHAR_STATUS, notify ~2 Hz) ──
 #
@@ -81,7 +83,12 @@ PROTOCOL_VERSION = 1
 #     "media": {"enabled":false, "port":8765, "token":null, "path":"/live"},
 #     "net":   [{"name":"wlan0","ip":"192.168.1.42","type":"wifi"}],
 #     "ap":    {"active":false, "ssid":null, "passphrase":null,
-#               "iface":"wlan0", "client_count":0}
+#               "iface":"wlan0", "client_count":0},
+#
+#     # picamera2 live preview status (set when speckle isn't using the cam):
+#     "live_preview": {"active":true, "available":true,
+#                      "fps_target":10, "fps_actual":9.6,
+#                      "w":640, "h":480, "exposure_us":20000, "frames":1234}
 #   }
 #
 # ── Preview (device → client, CHAR_PREVIEW, notify-only) ──

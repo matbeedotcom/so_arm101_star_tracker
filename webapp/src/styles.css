@@ -237,6 +237,18 @@ label { color: var(--text-dim); font-size: 12px; display: block; margin-bottom: 
   margin-top: 10px;
   font-size: 12px;
 }
+.preview-toolbar {
+  float: right;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.preview-empty-hint {
+  font-size: 12px;
+  margin-top: 4px;
+}
+.btn-mini { padding: 3px 10px; font-size: 11px; }
+.err-inline { color: var(--err); }
 
 /* Network list */
 .net-list {

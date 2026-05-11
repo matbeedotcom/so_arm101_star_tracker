@@ -72,6 +72,11 @@ class MediaBroadcaster:
         self.latest_preview: Optional[bytes] = None
         self.latest_meta: FrameMeta = {}
 
+        # Thumbnail derivation is the most expensive op (resize + reencode).
+        # Cap it to ~2 Hz; BLE notifications can't go faster anyway.
+        self._thumb_min_interval = 0.5
+        self._last_thumb_ts = 0.0
+
     # ── lifecycle ──
 
     async def start(self) -> None:
@@ -106,12 +111,7 @@ class MediaBroadcaster:
     # ── manual injection (for non-disk sources, e.g. live picamera) ──
 
     async def publish_raw(self, image_bytes: bytes, meta: FrameMeta) -> None:
-        """Generate derivatives from an in-memory image and fan out.
-
-        ``image_bytes`` may be any format PIL can open. Useful if we
-        later add a live preview stream from picamera2 that doesn't
-        touch disk.
-        """
+        """Generate derivatives from an in-memory encoded image."""
         if not _HAVE_PIL:
             return
         try:
@@ -119,6 +119,32 @@ class MediaBroadcaster:
         except Exception as e:
             log.warning("derive failed: %s", e)
             return
+        await self._fan_out(thumb, preview, meta)
+
+    async def publish_array(self, rgb, meta: FrameMeta) -> None:
+        """Publish a live picamera2 frame (RGB ndarray, shape H×W×3).
+
+        The preview JPEG is regenerated every call; the thumbnail is
+        rate-limited because the BLE side can't fire faster than ~2 Hz
+        regardless, and resizing + reencoding is the hottest op.
+        """
+        if not _HAVE_PIL:
+            return
+        loop = asyncio.get_running_loop()
+        now = time.time()
+        want_thumb = (now - self._last_thumb_ts) >= self._thumb_min_interval
+
+        try:
+            thumb, preview = await loop.run_in_executor(
+                None, self._derive_array, rgb, want_thumb,
+            )
+        except Exception as e:
+            log.warning("derive_array failed: %s", e)
+            return
+
+        if want_thumb and thumb is not None:
+            self._last_thumb_ts = now
+
         await self._fan_out(thumb, preview, meta)
 
     # ── internals ──
@@ -194,6 +220,38 @@ class MediaBroadcaster:
                     best = (m, entry.path)
         return best[1] if best else None
 
+    def _derive_array(self, rgb, want_thumb: bool) -> tuple[Optional[bytes], bytes]:
+        """Encode a live RGB array to (optional thumb, preview JPEG)."""
+        # PIL handles uint8 RGB arrays directly via fromarray.
+        img = Image.fromarray(rgb)
+
+        w, h = img.size
+        # Same wide-aspect handling as the disk path.
+        if w > 2 * h:
+            left = (w - h) // 2
+            img = img.crop((left, 0, left + h, h))
+
+        # Preview (always)
+        p = img.copy()
+        p.thumbnail(self.preview_size)
+        if p.mode not in ("L", "RGB"):
+            p = p.convert("RGB")
+        preview_buf = io.BytesIO()
+        p.save(preview_buf, format="JPEG", quality=self.preview_quality, optimize=False)
+        preview = preview_buf.getvalue()
+
+        thumb = None
+        if want_thumb:
+            t = img.copy()
+            t.thumbnail((self.thumb_size, self.thumb_size))
+            if t.mode != "L":
+                t = t.convert("L")
+            thumb_buf = io.BytesIO()
+            t.save(thumb_buf, format="JPEG", quality=self.thumb_quality, optimize=True)
+            thumb = thumb_buf.getvalue()
+
+        return thumb, preview
+
     def _derive(self, image_bytes: bytes) -> tuple[bytes, bytes]:
         """Return (thumb_jpeg, preview_jpeg). Pure CPU; runs in executor."""
         img = Image.open(io.BytesIO(image_bytes))
@@ -233,8 +291,9 @@ class MediaBroadcaster:
 
         return thumb, preview
 
-    async def _fan_out(self, thumb: bytes, preview: bytes, meta: FrameMeta) -> None:
-        self.latest_thumbnail = thumb
+    async def _fan_out(self, thumb: Optional[bytes], preview: bytes, meta: FrameMeta) -> None:
+        if thumb is not None:
+            self.latest_thumbnail = thumb
         self.latest_preview = preview
         self.latest_meta = meta
 
@@ -247,7 +306,8 @@ class MediaBroadcaster:
             except Exception:
                 log.exception("listener error")
 
-        await asyncio.gather(
-            *[_call(fn, thumb, meta) for fn in list(self._thumb_listeners)],
-            *[_call(fn, preview, meta) for fn in list(self._frame_listeners)],
-        )
+        tasks = [_call(fn, preview, meta) for fn in list(self._frame_listeners)]
+        if thumb is not None:
+            tasks.extend(_call(fn, thumb, meta) for fn in list(self._thumb_listeners))
+        if tasks:
+            await asyncio.gather(*tasks)

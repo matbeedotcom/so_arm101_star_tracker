@@ -30,6 +30,7 @@ from astropy.coordinates import SkyCoord
 
 from . import tracker as _tracker  # for module-level `running` (SIGINT)
 from . import network as _network
+from .live_camera import LiveCamera
 from .media import MediaBroadcaster
 from .image_server import ImageServer
 from .config import (
@@ -84,6 +85,7 @@ class TrackerSession:
         self._loop: "asyncio.AbstractEventLoop | None" = None
         self.media: Optional[MediaBroadcaster] = None
         self.image_server: Optional[ImageServer] = None
+        self.live_camera: Optional[LiveCamera] = None
         self._media_port = 8765
         self._media_token: Optional[str] = None
         self._net: list[dict] = []
@@ -147,6 +149,10 @@ class TrackerSession:
         self._close_hw()
 
     async def _shutdown_media(self) -> None:
+        if self.live_camera is not None:
+            try: await self.live_camera.stop()
+            except Exception: pass
+            self.live_camera = None
         if self.image_server is not None and self.image_server.running:
             try: await self.image_server.stop()
             except Exception: pass
@@ -180,6 +186,12 @@ class TrackerSession:
         }
         s["net"] = list(self._net)
         s["ap"] = dict(self._ap)
+        s["live_preview"] = (
+            self.live_camera.status() if self.live_camera is not None
+            else {"active": False, "available": False, "fps_target": 0,
+                  "fps_actual": 0.0, "w": 0, "h": 0, "exposure_us": 0,
+                  "frames": 0}
+        )
         return s
 
     def list_poses(self) -> list:
@@ -279,6 +291,10 @@ class TrackerSession:
                 self._async(self._do_start_ap(cmd))
             elif c == "stop_ap":
                 self._async(self._do_stop_ap(cmd))
+            elif c == "live_start":
+                self._async(self._do_live_start(cmd))
+            elif c == "live_stop":
+                self._async(self._do_live_stop(cmd))
             else:
                 self._log(f"E {cmd.req or ''} unknown cmd: {c}")
         except Exception as e:
@@ -421,6 +437,7 @@ class TrackerSession:
     def _do_set_config(self, cmd: Command) -> None:
         a = cmd.args
         changed = []
+        prev_capture = self.config.capture
         if "mode" in a and a["mode"] in ("ndof", "imu"):
             self.config.mode = a["mode"]; changed.append(f"mode={a['mode']}")
         if "exposure" in a:
@@ -430,6 +447,18 @@ class TrackerSession:
             changed.append(f"burst={a['burst_count']}")
         if "capture" in a:
             self.config.capture = bool(a["capture"]); changed.append(f"cap={a['capture']}")
+        # If capture toggled, hand the camera back and forth.
+        if "capture" in a and self.config.capture != prev_capture:
+            if self.config.capture:
+                # Going into speckle mode — release the live stream.
+                self._async(self._stop_live_camera())
+            else:
+                # Speckle just released the camera — start preview if we can.
+                if self.cam is None:
+                    self._async(self._ensure_live_camera())
+        # Tell LiveCamera about new exposure so the preview matches.
+        if "exposure" in a and self.live_camera is not None:
+            self.live_camera.update_controls(exposure_us=self.config.exposure)
         self._log(f"D {cmd.req or ''} set_config:{','.join(changed) or 'noop'}")
 
     # ── Async (loop-bound) command handlers ──
@@ -471,6 +500,43 @@ class TrackerSession:
         self._media_token = None
         self._log(f"D {cmd.req or ''} disable_media:ok")
 
+    # ── LiveCamera lifecycle ──
+
+    async def _ensure_live_camera(self) -> None:
+        """Start LiveCamera if speckle isn't holding the camera."""
+        if self.cam is not None:
+            return  # speckle has the sensor; live preview cannot run
+        if self.media is None:
+            return  # no broadcaster to hand frames to
+        if self.live_camera is not None and self.live_camera.running:
+            return
+        if self.live_camera is None:
+            self.live_camera = LiveCamera(sink=self.media.publish_array)
+        ok = await self.live_camera.start()
+        if ok:
+            self._log("I live_preview: streaming")
+        elif self.live_camera is not None and not self.live_camera.available:
+            # picamera2 unavailable / sensor busy — drop the instance so
+            # we don't keep retrying.
+            self.live_camera = None
+
+    async def _stop_live_camera(self) -> None:
+        if self.live_camera is None:
+            return
+        await self.live_camera.stop()
+        self._log("I live_preview: stopped")
+
+    async def _do_live_start(self, cmd: Command) -> None:
+        if self.cam is not None:
+            raise RuntimeError("speckle owns the camera — disable capture first")
+        await self._ensure_live_camera()
+        self._log(f"D {cmd.req or ''} live_start:ok")
+
+    async def _do_live_stop(self, cmd: Command) -> None:
+        await self._stop_live_camera()
+        self.live_camera = None
+        self._log(f"D {cmd.req or ''} live_stop:ok")
+
     async def _do_start_ap(self, cmd: Command) -> None:
         ssid = str(cmd.args.get("ssid") or "StarTracker")
         passphrase = str(cmd.args.get("passphrase") or "")
@@ -505,11 +571,16 @@ class TrackerSession:
         self.strategy = WristOnlyStrategy()
         self.strategy.calibrate_pitch_dir(self.ph, self.pkt, self.imu_bus)
         if self.config.capture:
+            # Speckle pipeline owns the camera — make sure LiveCamera lets go.
+            self._async(self._stop_live_camera())
             self.cam = init_camera(self.config.exposure)
             self.pipeline = init_speckle_pipeline(
                 self.cam, self.config.exposure,
                 self.config.burst_count, self.config.capture_dir,
             )
+        else:
+            # No speckle — opportunistic live preview from picamera2.
+            self._async(self._ensure_live_camera())
         self._log("I init: ok")
 
     def _close_servos(self) -> None:
@@ -530,6 +601,9 @@ class TrackerSession:
             self.pkt = None
 
     def _close_hw(self) -> None:
+        # Release LiveCamera before speckle camera/pipeline teardown so
+        # both don't fight over picamera2.
+        self._async(self._stop_live_camera())
         self._close_servos()
         if self.pipeline is not None:
             try:
