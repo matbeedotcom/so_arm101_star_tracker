@@ -99,15 +99,24 @@ def run_capture(pipeline, ph, pkt, imu_bus, target_info, target_name,
 # ── Slew ──
 
 def slew_to_target(target_info, imu_bus, ph, pkt, strategy,
-                    target_name='target', pipeline=None, active_mode=MODE_IMU):
-    """Initial slew to get close to the target."""
+                    target_name='target', pipeline=None, active_mode=MODE_IMU,
+                    should_stop=None, status_cb=None):
+    """Initial slew to get close to the target.
+
+    Optional hooks for remote control:
+        should_stop(): -> bool, called per iteration. Defaults to the module
+                       `running` flag so CLI Ctrl+C still works.
+        status_cb(dict): live telemetry on each iteration.
+    """
     print("\n--- Slewing to target ---")
 
-    error_history = []
+    if should_stop is None:
+        should_stop = lambda: not running  # noqa: E731
+
     best_error = float('inf')
 
     for iteration in range(50):
-        if not running:
+        if should_stop():
             return False
 
         target_alt, target_az = compute_altaz(target_info)
@@ -123,6 +132,15 @@ def slew_to_target(target_info, imu_bus, ph, pkt, strategy,
         print(f"  [{iteration+1}] Az={imu['heading']:.1f}->{target_az:.1f} ({az_error:+.1f}°)  "
               f"Alt={gpitch:.1f}->{target_alt:.1f} ({alt_error:+.1f}°)  "
               f"Err={total_error:.1f}°  [{status_str}]")
+
+        if status_cb is not None:
+            status_cb({
+                'phase': 'slew', 'iteration': iteration + 1,
+                'target_alt': target_alt, 'target_az': target_az,
+                'imu_heading': imu['heading'], 'imu_pitch': gpitch,
+                'az_err': az_error, 'alt_err': alt_error,
+                'total_err': total_error, 'calib': calib_str(imu, active_mode),
+            })
 
         best_error = min(best_error, total_error)
 
@@ -148,17 +166,24 @@ def slew_to_target(target_info, imu_bus, ph, pkt, strategy,
 # ── Track ──
 
 def track_target(target_info, target_name, imu_bus, ph, pkt, strategy,
-                  pipeline=None, active_mode=MODE_IMU):
-    """Continuously track the target, correcting for sky motion."""
+                  pipeline=None, active_mode=MODE_IMU,
+                  should_stop=None, status_cb=None):
+    """Continuously track the target, correcting for sky motion.
+
+    Optional hooks for remote control: see slew_to_target.
+    """
     print(f"\n--- Tracking {target_name} (Ctrl+C to stop) ---")
     print(f"{'Time':>10}  {'Target Az':>10} {'Target Alt':>10}  "
           f"{'IMU Az':>8} {'IMU Alt':>8}  {'Err':>5}  {'Calib':>6}")
     print("-" * 75)
 
+    if should_stop is None:
+        should_stop = lambda: not running  # noqa: E731
+
     correction_count = 0
     capture_count = 0
 
-    while running:
+    while not should_stop():
         target_alt, target_az = compute_altaz(target_info)
         target_alt = max(0.0, target_alt)
         imu = read_imu(imu_bus, samples=3, interval=0.03)
@@ -174,6 +199,16 @@ def track_target(target_info, target_name, imu_bus, ph, pkt, strategy,
         print(f"  {now}  Az={target_az:7.2f}° Alt={target_alt:7.2f}°  "
               f"H={imu['heading']:7.2f} P={gpitch:7.2f}  "
               f"{total_error:4.1f}°  {cal}", end="")
+
+        if status_cb is not None:
+            status_cb({
+                'phase': 'track',
+                'target_alt': target_alt, 'target_az': target_az,
+                'imu_heading': imu['heading'], 'imu_pitch': gpitch,
+                'az_err': az_error, 'alt_err': alt_error,
+                'total_err': total_error, 'calib': cal,
+                'corrections': correction_count, 'captures': capture_count,
+            })
 
         if total_error > TOLERANCE_DEG * 2:
             gain = min(0.4, total_error / 30.0 + 0.1)

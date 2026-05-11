@@ -1,229 +1,181 @@
-# SO-ARM101 MoveIt Isaac Sim Integration
+# SO-100 Star Tracker
 
-## Introduction
+Point a SO-100 robot arm at any celestial object and track it in real
+time. No ROS, no planner — direct I²C to a BNO055 IMU and serial to
+Feetech servos. Targets are resolved through Astropy, so anything from
+the built-in catalog (planets + bright stars) to arbitrary RA/Dec works.
 
-This repository demonstrates how to integrate MoveIt with Isaac Sim using ROS2 on the SO-ARM101 dual-arm robot. The SO-ARM101 (and older SO-ARM100) is an open-source dual-arm robot created by [TheRobotStudio](https://github.com/TheRobotStudio/SO-ARM100) in collaboration with [HuggingFace's LeRobot](https://github.com/huggingface/lerobot) for robotics research and education.
+Includes a Bluetooth LE peripheral (`goto_ble.py`) and a React Web
+Bluetooth client (`webapp/`) for headless / Wi-Fi-less operation, plus
+an optional speckle-interferometry burst pipeline for the Arducam quad
+camera.
 
-[MoveIt](https://moveit.ai/) provides robot motion planning, manipulation, and control capabilities in ROS2, enabling control of real robots from simulation. This tutorial focuses on simulation-only implementation, with Sim2Real capabilities planned for future releases.
+## How it works
 
-**📺 Full video tutorial available on [LycheeAI YouTube Channel](https://www.youtube.com/@LycheeAI)**
+```
+       celestial target            BNO055 (heading, pitch)
+              │                            │
+              ▼                            ▼
+         astropy ─────► alt/az ──► error ──► motion strategy
+                                                  │
+                                                  ▼
+                                       Feetech servos (Sh-rot, wrist
+                                       pitch) + base wheels (azimuth)
+```
 
-## Get Your Own SO-ARM Robot 🤖
+The wrist-pitch motor handles altitude, the shoulder rotation (with
+base-wheel fallback when near its limits) handles azimuth, and motors 2
+& 3 stay locked at a recorded pose so the arm geometry is consistent
+across sessions.
 
-Want the real robot? Get your own SO-ARM101 (or SO-ARM100) from [WowRobo](https://shop.wowrobo.com/?sca_ref=8879221.Q7i7RSlTAVB) using discount code **`LYCHEEAI5`**
+## Hardware
 
-*Make sure to "Add to cart" or choose "More payment options" to apply the discount code!*
+| Component        | Default                                        |
+| ---------------- | ---------------------------------------------- |
+| Robot arm        | SO-100 / SO-101 (5 servos + 3 omni base wheels) |
+| Servo bus        | Feetech STS / SCS, `/dev/ttyACM0` @ 1 Mbps      |
+| IMU              | BNO055 on I²C bus 1                            |
+| Camera (optional) | Arducam Quad (picamera2)                       |
+| Compute          | Raspberry Pi 4/5 (also runs fine on a laptop with a USB-serial servo bus and BNO055 USB breakout) |
 
-## Prerequisites
+Observer location, port assignments, and servo IDs live in
+[`goto/config.py`](goto/config.py).
 
-- **Isaac Sim** - [Installation Guide: Isaac Sim & Isaac Lab](https://www.notion.so/Installation-Guide-Isaac-Sim-Isaac-Lab-1c428763942b8089ad48cf88e01ad213?pvs=21)
-- **Linux Ubuntu 22.04** with **ROS2 Humble**
-- **ROS2 Humble Installation** - [Official Guide](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/install_ros.html)
-- **ROS2 Basics Knowledge** - Complete the [TurtleBot Tutorial](https://www.youtube.com/watch?v=3cWQsvpwvQU&ab_channel=Nex-dynamicsrobot)
+## Install
 
-## Quick Start (Skip Tutorial)
-
-If you want to skip the step-by-step tutorial or encounter issues, use this quick setup:
+Python 3.11 in a conda env (matches the Pi's system `libcamera`):
 
 ```bash
-# Clone the repository
-git clone https://github.com/MuammerBay/SO-ARM101_MoveIt_IsaacSim.git
-cd SO-ARM101_MoveIt_IsaacSim
+conda create -n star311 python=3.11 -y
+conda activate star311
+pip install -r requirements.txt
 
-# Source ROS 2
-source /opt/ros/humble/setup.bash
-
-# Update rosdep database
-rosdep update
-
-# Install ALL dependencies automatically
-rosdep install --from-paths src --ignore-src -r -y
-
-# Build the workspace
-colcon build
-
-# Source the workspace
-source install/setup.bash
-
-# Launch MoveIt demo
-ros2 launch so_arm_moveit_config demo.launch.py
+# System packages picamera2 can't be pip-installed — symlink them in:
+SITE=$(python3 -c "import site; print(site.getsitepackages()[0])")
+for pkg in libcamera picamera2 pykms videodev2; do
+  ln -s /usr/lib/python3/dist-packages/$pkg $SITE/$pkg
+done
 ```
 
-### Start Isaac Sim (Separate Terminal)
+Add yourself to `dialout` (for the servo USB) and `i2c` (for the IMU):
 
 ```bash
-# Source ROS 2
-source /opt/ros/humble/setup.bash
-
-# Run Isaac Sim with ROS2 enabled
-[ISAAC-SIM-4.5-FOLDER]/isaac-sim.selector.sh
+sudo usermod -aG dialout,i2c $USER
 ```
 
-### Final Steps
-1. Open the USD file (created from URDF) in Isaac Sim
-2. Start the simulation (press Play)
-3. Control the robot in RViz
+## CLI — `goto.py`
 
-## Step-by-Step Tutorial
-
-*This tutorial is based on the excellent work by [robot mania](https://www.youtube.com/@robotmania8896) - highly recommended channel for robotics topics!*
-
-### 1. ROS2 & MoveIt Setup
-
-Source ROS2 Humble in every terminal:
 ```bash
-source /opt/ros/humble/setup.bash
+python3 goto.py polaris                    # named star or planet
+python3 goto.py moon
+python3 goto.py --ra 5h55m10s --dec -7d24m25s
+python3 goto.py --alt 45 --az 180          # fixed alt/az
+
+python3 goto.py --record-pose tracking     # save current arm config
+python3 goto.py --pose tracking polaris    # lock motors 2,3 to that pose
+python3 goto.py --calibrate                # 3-point pitch calibration
 ```
 
-Create ROS workspace:
+Useful flags: `--mode {ndof,imu}` (toggle magnetometer), `--no-capture`,
+`--exposure`, `--burst-count`, `--skip-cal`, `--lat`, `--lon`.
+
+On startup the script sweeps through a fixed set of poses to give the
+BNO055 enough motion data to converge — pass `--skip-cal` to bypass.
+Ctrl-C cleanly stops the wheels and restores servo mode.
+
+## BLE remote control
+
+For a headless Pi (no display, no Wi-Fi needed). Phone or laptop
+connects over Bluetooth LE; everything else stays the same.
+
+### Pi side
+
 ```bash
-mkdir -p ~/so-arm_moveit_isaacsim_ws/src
-cd ~/so-arm_moveit_isaacsim_ws
+sudo python3 goto_ble.py                   # advertises as "StarTracker"
 ```
 
-Install ROS2 dependencies:
+Or run it as a service:
+
 ```bash
-sudo apt update
-sudo apt install \
-  ros-humble-moveit \
-  ros-humble-ros2-control \
-  ros-humble-ros2-controllers \
-  ros-humble-gripper-controllers \
-  ros-humble-topic-based-ros2-control
+sudo cp systemd/star-tracker-ble.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now star-tracker-ble
+journalctl -u star-tracker-ble -f
 ```
 
-Create package directories:
+Requires BlueZ ≥ 5.55. Root by default so it can advertise — drop
+privileges with `CAP_NET_ADMIN`/`CAP_NET_RAW` if you want.
+
+### Web client
+
+Chrome or Edge on desktop / Android (Safari does not support Web
+Bluetooth). Use `localhost` for dev or HTTPS over a tunnel for LAN:
+
 ```bash
-cd ~/so-arm_moveit_isaacsim_ws/src
-mkdir -p so_arm_moveit_config
-mkdir -p so_arm_description
+cd webapp
+npm install
+npm run dev                                # http://localhost:5173
 ```
 
-### 2. Robot Description Setup
+UI exposes target selection (catalog, RA/Dec, alt/az), live IMU + error
+telemetry, IMU calibration, observer GPS, pose record/lock/delete, and a
+streamed log. The GATT schema is in
+[`goto/ble_protocol.py`](goto/ble_protocol.py); the TypeScript mirror is
+[`webapp/src/protocol.ts`](webapp/src/protocol.ts).
 
-Clone the SO-ARM URDF (adjusted for proper ROS2 format):
-```bash
-cd ~/so-arm_moveit_isaacsim_ws/src/so_arm_description
-git clone https://github.com/MuammerBay/SO-ARM_ROS2_URDF.git .
+## Calibration
+
+Two separate things, both run from the CLI:
+
+1. **IMU calibration** — sweeps the arm through fixed poses so the
+   BNO055 can settle. Happens automatically on `goto.py` startup, or
+   on-demand via the BLE `calibrate_imu` command.
+2. **Pitch calibration** — `python3 goto.py --calibrate` walks you
+   through positioning the wrist by hand at three different pitch
+   angles. Records ticks ↔ degrees, fits a line, saves it to
+   `poses/pitch_cal.json`. Re-run after any mechanical change.
+
+For polar alignment / IMU axis sanity-check, see
+[`aim_polaris.py`](aim_polaris.py) and
+[`calibrate_imu_axes.py`](calibrate_imu_axes.py).
+
+## Speckle capture (optional)
+
+If an Arducam quad camera is attached, `goto.py` and `goto_ble.py` will
+init a speckle pipeline. Use `--burst-count 100` for true speckle mode,
+`1` for single-shot. Captures are written under `speckle_captures/` and
+processed in the background; the
+[`speckle/`](speckle/) package owns capture, stability detection,
+storage, and reconstruction.
+
+## Project layout
+
 ```
-
-Build workspace:
-```bash
-cd ~/so-arm_moveit_isaacsim_ws
-colcon build
+goto.py                  CLI entry — slew + track + optional capture
+goto_ble.py              BLE peripheral entry
+goto/
+  config.py              Pins, baud rates, joint limits, star catalog
+  celestial.py           Target resolution + alt/az via Astropy
+  imu.py                 BNO055 driver + calibration helpers
+  servos.py              Feetech SDK wrapper, base-wheel mode
+  strategy.py            WristOnlyStrategy: maps error → motor moves
+  tracker.py             slew_to_target / track_target loops
+  session.py             Thread-safe controller for remote use
+  ble_protocol.py        UUIDs + JSON schemas
+  ble_server.py          GATT server (bless)
+webapp/                  React + Vite + TS Web Bluetooth client
+speckle/                 Speckle interferometry pipeline
+poses/                   Saved arm configurations (.json)
+systemd/                 star-tracker-ble.service unit
 ```
-
-### 3. MoveIt Setup Assistant
-
-Launch MoveIt Setup Assistant:
-```bash
-source ~/so-arm_moveit_isaacsim_ws/install/setup.bash
-ros2 launch moveit_setup_assistant setup_assistant.launch.py
-```
-
-After setup, rebuild:
-```bash
-cd ~/so-arm_moveit_isaacsim_ws
-colcon build
-```
-
-### 4. Configuration Adjustments
-
-**Fix joint_limits.yaml**: Replace Integer values with Float values
-
-**Update moveit_controllers.yaml**: Add to arm_controller:
-```yaml
-action_ns: follow_joint_trajectory
-default: true
-```
-
-Rebuild after changes:
-```bash
-colcon build
-```
-
-Test MoveIt without Isaac Sim:
-```bash
-ros2 launch so_arm_moveit_config demo.launch.py
-```
-
-### 5. Isaac Sim Integration
-
-Open Isaac Sim:
-```bash
-source /opt/ros/humble/setup.bash
-[ISAAC-SIM-4.5-FOLDER]/isaac-sim.selector.sh
-```
-
-**Import URDF** with these settings:
-- Stiffness: 17.8
-- Damping: 0.60
-- Set articulation root to base mesh (xform)
-
-**Create ROS2 Action Graph**:
-- Tools → Robotics → ROS2 Omnigraphs → Joint States
-- Articulation: base mesh (xform)
-- Joint States Topic: `/isaac_joint_states`
-- Joint Commands Topic: `/isaac_joint_command`
-
-### 6. Final Configuration
-
-Update `src/so_arm_moveit_config/config/so101_new_calib.ros2_control.xacro`:
-
-Replace:
-```xml
-<plugin>mock_components/GenericSystem</plugin>
-```
-
-With:
-```xml
-<!-- <plugin>mock_components/GenericSystem</plugin> -->
-<plugin>topic_based_ros2_control/TopicBasedSystem</plugin>
-<param name="joint_states_topic">/isaac_joint_states</param>
-<param name="joint_commands_topic">/isaac_joint_command</param>
-```
-
-Final rebuild:
-```bash
-cd ~/so-arm_moveit_isaacsim_ws
-colcon build
-```
-
-### 7. Launch and Test
-
-Start MoveIt:
-```bash
-source install/setup.bash
-ros2 launch so_arm_moveit_config demo.launch.py
-```
-
-1. Start Isaac Sim simulation (press Play)
-2. Control robot in RViz
-3. Enjoy your SO-ARM MoveIt integration!
-
-## Docker Setup
-
-[Quentin Deyna](https://www.linkedin.com/in/quentindeyna/) is working on a Docker setup to solve "works-on-my-machine" problems:
-- [Docker Repository](https://github.com/qdeyna/SO-ARM_MoveIt_IsaacSim)
 
 ## Credits
 
-- Tutorial based on [robot mania's](https://www.youtube.com/@robotmania8896) excellent Isaac Sim + MoveIt guide
-- SO-ARM robot by [TheRobotStudio](https://github.com/TheRobotStudio/SO-ARM100)
-- Integration with [HuggingFace LeRobot](https://github.com/huggingface/lerobot)
-- Video tutorial on [LycheeAI YouTube Channel](https://www.youtube.com/@LycheeAI)
-
-## Repository Structure
-
-```
-├── src/
-│   ├── so_arm_description/     # Robot URDF and meshes
-│   ├── so_arm_moveit_config/   # MoveIt configuration
-│   └── isaac_sim_usd/          # Isaac Sim USD files
-├── README.md
-└── .gitignore
-```
+- [SO-ARM100/101](https://github.com/TheRobotStudio/SO-ARM100) by TheRobotStudio
+- [Astropy](https://www.astropy.org/) for coordinate transforms
+- [Feetech SCServo SDK](https://github.com/scservo) for the servo protocol
+- [bless](https://github.com/kevincar/bless) for cross-platform BLE peripheral support
 
 ## License
 
-This project follows the same license as the original SO-ARM project. Please refer to the original repositories for licensing information. 
+See upstream SO-ARM project for license terms.

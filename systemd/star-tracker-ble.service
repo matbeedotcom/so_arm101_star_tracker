@@ -1,0 +1,20 @@
+[Unit]
+Description=Star Tracker BLE peripheral (goto_ble.py)
+After=bluetooth.target
+Requires=bluetooth.target
+
+[Service]
+Type=simple
+# Adjust paths for your install
+WorkingDirectory=/home/acidhax/dev/so_arm101_star_tracker
+ExecStart=/home/acidhax/miniforge3/envs/star311/bin/python3 /home/acidhax/dev/so_arm101_star_tracker/goto_ble.py --log INFO
+Restart=on-failure
+RestartSec=3
+# BLE peripheral needs to advertise — runs as root for BlueZ access.
+# Tighten with CAP_NET_ADMIN+CAP_NET_RAW if you want to drop privileges.
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

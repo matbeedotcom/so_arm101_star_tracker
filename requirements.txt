@@ -31,3 +31,6 @@ piexif
 simplejpeg
 v4l2-python3
 python-prctl
+
+# BLE peripheral (goto_ble.py — cross-platform GATT server using BlueZ on Linux)
+bless
