@@ -40,6 +40,7 @@ export interface Status {
   mode: "ndof" | "imu";
   hw: { imu: boolean; servos: boolean; camera: boolean };
   capture: { enabled: boolean; burst_count: number };
+  camera: { hfov_deg: number; vfov_deg: number };
   locked_pose: string | null;
   uptime: number;
   error: string | null;
@@ -72,6 +73,7 @@ export interface ConfigPayload {
   mode: "ndof" | "imu";
   hw: { imu: boolean; servos: boolean; camera: boolean };
   capture: { enabled: boolean; burst_count: number };
+  camera: { hfov_deg: number; vfov_deg: number };
   locked_pose: string | null;
   media: { enabled: boolean; port: number; token: string | null; path: string };
   live_preview: LivePreviewState;
@@ -167,7 +169,7 @@ export type Command =
   | { cmd: "delete_pose"; req?: number; name: string }
   | { cmd: "calibrate_imu"; req?: number }
   | { cmd: "calibrate_pitch"; req?: number }
-  | { cmd: "set_config"; req?: number; mode?: "ndof" | "imu"; exposure?: number; burst_count?: number; capture?: boolean }
+  | { cmd: "set_config"; req?: number; mode?: "ndof" | "imu"; exposure?: number; burst_count?: number; capture?: boolean; hfov_deg?: number; vfov_deg?: number }
   | { cmd: "reinit_hw"; req?: number }
   | { cmd: "refresh_poses"; req?: number }
   | { cmd: "enable_media"; req?: number }

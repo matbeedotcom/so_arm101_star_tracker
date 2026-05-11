@@ -113,6 +113,30 @@ SLEW_MAX_ITERATIONS    = 18    # Hard cap; loop usually exits earlier.
 SLEW_NO_PROGRESS_LIMIT = 4     # Iters without ≥SLEW_MIN_IMPROVEMENT → bail.
 SLEW_MIN_IMPROVEMENT   = 0.5   # Degrees of total-error reduction per iter.
 
+# ── Camera optics ──
+# Field of view (degrees). Wide-field lenses stay forgiving at
+# degree-scale pointing errors; long focal lengths need arc-minute
+# precision. Used by the frontend to render "% of FOV" feedback and
+# decide whether a target is comfortably framed.
+CAMERA_HFOV_DEG = 75.0
+CAMERA_VFOV_DEG = 50.0
+
+# Approximate angular sizes for known celestial bodies (degrees).
+# Stars are point sources (0.0). Planets vary with Earth distance — the
+# values below are typical peaks at favourable oppositions; treat as
+# rough framing hints rather than ephemeris-grade truth.
+TARGET_ANGULAR_SIZE = {
+    'sun':     0.53,
+    'moon':    0.52,
+    'mercury': 0.003,
+    'venus':   0.017,
+    'mars':    0.014,
+    'jupiter': 0.040,
+    'saturn':  0.046,   # rings included
+    'uranus':  0.001,
+    'neptune': 0.0007,
+}
+
 # IMU stability thresholds
 IMU_STABLE_THRESHOLD = 0.15
 IMU_STABLE_SAMPLES = 6

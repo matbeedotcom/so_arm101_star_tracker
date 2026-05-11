@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { StarTrackerClient } from "../ble";
 import type { Status } from "../protocol";
 import { SkyMap, type SkySelection } from "./SkyMap";
+import { targetAngularSize } from "../sky";
 
 type Mode = "sky" | "radec" | "altaz";
 
@@ -101,6 +102,8 @@ export function TargetSelector({
         </div>
       )}
 
+      <PrecisionHint mode={mode} selection={selection} status={status} />
+
       <hr className="hr" />
 
       <div className="row">
@@ -114,6 +117,67 @@ export function TargetSelector({
           Park
         </button>
       </div>
+    </div>
+  );
+}
+
+function PrecisionHint({
+  mode, selection, status,
+}: {
+  mode: Mode;
+  selection: SkySelection | null;
+  status: Status | null;
+}) {
+  // Only known named targets have angular-size data; raw RA/Dec or
+  // alt/az inputs don't.
+  const targetName =
+    mode === "sky" && selection && selection.kind === "body" ? selection.name : null;
+  if (!targetName) return null;
+
+  const size = targetAngularSize(targetName);
+  if (size == null) return null;
+
+  const hfov = status?.camera?.hfov_deg ?? null;
+
+  // Required precision heuristic: half the target's angular diameter
+  // for extended objects, or ~1% of HFOV for point sources (something
+  // the user can realistically achieve with our IMU). Floor at 0.02°
+  // — finer than that is meaningless on most setups.
+  const required = Math.max(
+    size > 0 ? size / 2 : (hfov ? hfov / 100 : 0.5),
+    0.02
+  );
+
+  const frameFrac = hfov && hfov > 0 ? (size / hfov) * 100 : null;
+  const isPoint = size === 0;
+
+  // Current pointing error (if available) compared to required precision.
+  const azErr = status?.az_err;
+  const altErr = status?.alt_err;
+  const totalErr =
+    azErr != null && altErr != null
+      ? Math.sqrt(azErr * azErr + altErr * altErr)
+      : null;
+  let tone = "faint";
+  if (totalErr != null) {
+    if (totalErr <= required) tone = "err-ok";
+    else if (hfov && totalErr <= hfov / 4) tone = "err-warn";
+    else tone = "err-bad";
+  }
+
+  return (
+    <div className="row faint" style={{ fontSize: 12, marginTop: 6 }}>
+      <span>
+        <strong>{targetName}</strong>{" "}
+        {isPoint
+          ? "(point source)"
+          : `~${size.toFixed(size < 0.01 ? 4 : 3)}° wide`}
+        {frameFrac != null && !isPoint && ` · ${frameFrac.toFixed(2)}% of frame`}
+      </span>
+      <span className={tone} style={{ marginLeft: "auto" }}>
+        needs ~{required.toFixed(required < 0.1 ? 3 : 2)}° pointing
+        {totalErr != null && ` · now ${totalErr.toFixed(2)}°`}
+      </span>
     </div>
   );
 }

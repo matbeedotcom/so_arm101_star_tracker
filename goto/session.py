@@ -40,6 +40,7 @@ from .config import (
     SHOULDER_ROT, SHOULDER_PITCH, ELBOW, WRIST_PITCH, WRIST_ROLL,
     WHEEL_IDS, ADDR_LOCK, ADDR_MODE, CAL_POSES, POSES_DIR,
     STAR_CATALOG, SOLAR_SYSTEM,
+    CAMERA_HFOV_DEG, CAMERA_VFOV_DEG,
     save_pose, load_pose, angle_diff,
 )
 from .imu import init_imu, read_imu, calib_str, calibrate_imu, gravity_pitch
@@ -106,6 +107,8 @@ class TrackerSession:
         self.config = Config()
         self.observer_lat = OBSERVER_LAT
         self.observer_lon = OBSERVER_LON
+        self.camera_hfov = float(CAMERA_HFOV_DEG)
+        self.camera_vfov = float(CAMERA_VFOV_DEG)
 
         # Hardware handles (None until initialize_hw runs)
         self.imu_bus = None
@@ -223,6 +226,10 @@ class TrackerSession:
             "capture": {
                 "enabled": self.config.capture and self.pipeline is not None,
                 "burst_count": self.config.burst_count,
+            },
+            "camera": {
+                "hfov_deg": self.camera_hfov,
+                "vfov_deg": self.camera_vfov,
             },
             "locked_pose": self.locked_pose_name,
             "media": {
@@ -530,6 +537,20 @@ class TrackerSession:
             changed.append(f"burst={a['burst_count']}")
         if "capture" in a:
             self.config.capture = bool(a["capture"]); changed.append(f"cap={a['capture']}")
+        if "hfov_deg" in a:
+            try:
+                v = float(a["hfov_deg"])
+                if 1.0 <= v <= 180.0:
+                    self.camera_hfov = v; changed.append(f"hfov={v:.1f}")
+            except (TypeError, ValueError):
+                pass
+        if "vfov_deg" in a:
+            try:
+                v = float(a["vfov_deg"])
+                if 1.0 <= v <= 180.0:
+                    self.camera_vfov = v; changed.append(f"vfov={v:.1f}")
+            except (TypeError, ValueError):
+                pass
         # If capture toggled, hand the camera back and forth.
         if "capture" in a and self.config.capture != prev_capture:
             if self.config.capture:

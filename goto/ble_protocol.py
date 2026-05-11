@@ -52,7 +52,8 @@ PROTOCOL_VERSION = 1
 #   {"cmd":"set_config", "req":<int>,
 #        "mode":"ndof"|"imu",
 #        "exposure":10000, "burst_count":1,
-#        "capture":true|false}
+#        "capture":true|false,
+#        "hfov_deg":75.0, "vfov_deg":50.0}
 #   {"cmd":"reinit_hw", "req":<int>}                # re-open IMU + servos
 #   {"cmd":"refresh_poses", "req":<int>}            # force Poses notify
 #

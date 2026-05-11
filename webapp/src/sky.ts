@@ -39,6 +39,31 @@ export const SOLAR_SYSTEM = [
   "jupiter", "saturn", "uranus", "neptune",
 ] as const;
 
+// Approximate angular diameters in degrees, peak values at favourable
+// oppositions. Stars are point sources (0). Used by the frontend to
+// surface "required precision" for a given target — a body smaller than
+// the camera's per-pixel resolution will be a single pixel regardless
+// of how perfectly you point. Mirrors goto/config.py:TARGET_ANGULAR_SIZE.
+export const TARGET_ANGULAR_SIZE_DEG: Record<string, number> = {
+  sun:     0.53,
+  moon:    0.52,
+  mercury: 0.003,
+  venus:   0.017,
+  mars:    0.014,
+  jupiter: 0.040,
+  saturn:  0.046,
+  uranus:  0.001,
+  neptune: 0.0007,
+};
+
+export function targetAngularSize(name: string | null | undefined): number | null {
+  if (!name) return null;
+  const key = name.toLowerCase();
+  if (key in TARGET_ANGULAR_SIZE_DEG) return TARGET_ANGULAR_SIZE_DEG[key];
+  if (key in STAR_CATALOG_RADEC) return 0;   // point source
+  return null;
+}
+
 function julianDate(d: Date): number {
   return d.getTime() / 86400000 + 2440587.5;
 }

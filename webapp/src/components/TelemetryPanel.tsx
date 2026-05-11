@@ -11,6 +11,27 @@ function errClass(v: number | null): string {
   return "err-bad";
 }
 
+// Classify pointing error relative to the camera FOV. The thresholds
+// are fractions of the smaller (vertical) dimension since framing
+// "comfortably" means staying away from the frame edges in both axes.
+function fovClass(err: number | null, vfov: number | null | undefined): string {
+  if (err == null || !vfov || vfov <= 0) return "";
+  const half = vfov / 2;
+  if (err < half * 0.1)  return "err-ok";    // within 5% of frame center
+  if (err < half * 0.5)  return "err-warn";  // still in frame, off-center
+  return "err-bad";                            // off-frame
+}
+
+function fovLabel(err: number | null, vfov: number | null | undefined): string {
+  if (err == null || !vfov || vfov <= 0) return "—";
+  const half = vfov / 2;
+  const pct = (err / vfov) * 100;
+  let tag = "off-frame";
+  if (err < half * 0.1)  tag = "centered";
+  else if (err < half * 0.5) tag = "in frame";
+  return `${pct.toFixed(1)}% of FOV · ${tag}`;
+}
+
 export function TelemetryPanel({ status }: { status: Status | null }) {
   if (!status) {
     return (
@@ -62,6 +83,12 @@ export function TelemetryPanel({ status }: { status: Status | null }) {
         <div>
           <div className="label">Total Error</div>
           <div className={`value ${errClass(totalErr)}`}>{fmt(totalErr, "°", 2)}</div>
+        </div>
+        <div>
+          <div className="label">Framing</div>
+          <div className={`value small ${fovClass(totalErr, status.camera?.vfov_deg)}`}>
+            {fovLabel(totalErr, status.camera?.vfov_deg)}
+          </div>
         </div>
         <div>
           <div className="label">Calib / Mode</div>
