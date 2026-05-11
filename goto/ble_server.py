@@ -30,7 +30,8 @@ from bless import (  # type: ignore
 
 from .ble_protocol import (
     SERVICE_UUID, CHAR_COMMAND, CHAR_STATUS, CHAR_INFO, CHAR_POSES, CHAR_LOG,
-    CHAR_PREVIEW, DEVICE_NAME, PROTOCOL_VERSION,
+    CHAR_PREVIEW, CHAR_NETWORK, CHAR_SCHEDULE,
+    DEVICE_NAME, PROTOCOL_VERSION,
 )
 from .media import MediaBroadcaster
 from .session import TrackerSession, Command
@@ -63,6 +64,8 @@ class BLEServer:
         self._log_buf: "deque[str]" = deque(maxlen=200)
         self._last_status_bytes: bytes = b""
         self._last_poses_bytes: bytes = b""
+        self._last_network_bytes: bytes = b""
+        self._last_schedule_bytes: bytes = b""
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop = asyncio.Event()
         # BLE preview char — keep a tiny JPEG ready even before media is
@@ -140,6 +143,14 @@ class BLEServer:
         await self.server.add_new_characteristic(
             SERVICE_UUID, CHAR_PREVIEW, _NOTIFY_ONLY, b"", _PERM_R,
         )
+        await self.server.add_new_characteristic(
+            SERVICE_UUID, CHAR_NETWORK, _READ_NOTIFY,
+            json.dumps(self.session.network_snapshot()).encode(), _PERM_R,
+        )
+        await self.server.add_new_characteristic(
+            SERVICE_UUID, CHAR_SCHEDULE, _READ_NOTIFY,
+            json.dumps(self.session.schedule_snapshot()).encode(), _PERM_R,
+        )
 
         await self.server.start()
         log.info("BLE advertising as %s", self.server.name)
@@ -199,12 +210,33 @@ class BLEServer:
     async def _telemetry_loop(self) -> None:
         while not self._stop.is_set():
             try:
-                snap = self.session.snapshot()
-                payload = json.dumps(snap, separators=(",", ":")).encode()
+                # Status (high-frequency tick)
+                payload = json.dumps(
+                    self.session.snapshot(), separators=(",", ":"),
+                ).encode()
                 if payload != self._last_status_bytes:
                     self._set_value(CHAR_STATUS, payload)
                     await self._notify(CHAR_STATUS)
                     self._last_status_bytes = payload
+
+                # Network (changes on AP toggle / 10 s refresh)
+                net_payload = json.dumps(
+                    self.session.network_snapshot(), separators=(",", ":"),
+                ).encode()
+                if net_payload != self._last_network_bytes:
+                    self._set_value(CHAR_NETWORK, net_payload)
+                    await self._notify(CHAR_NETWORK)
+                    self._last_network_bytes = net_payload
+
+                # Schedule + suggestion (changes on user action)
+                sched_payload = json.dumps(
+                    self.session.schedule_snapshot(), separators=(",", ":"),
+                ).encode()
+                if sched_payload != self._last_schedule_bytes:
+                    self._set_value(CHAR_SCHEDULE, sched_payload)
+                    await self._notify(CHAR_SCHEDULE)
+                    self._last_schedule_bytes = sched_payload
+
                 # Drain log buffer
                 while self._log_buf:
                     line = self._log_buf.popleft()

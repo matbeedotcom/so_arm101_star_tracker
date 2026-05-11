@@ -6,7 +6,9 @@ export const CHAR_STATUS  = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d103";
 export const CHAR_INFO    = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d104";
 export const CHAR_POSES   = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d105";
 export const CHAR_LOG     = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d106";
-export const CHAR_PREVIEW = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d107";
+export const CHAR_PREVIEW  = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d107";
+export const CHAR_NETWORK  = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d108";
+export const CHAR_SCHEDULE = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d109";
 
 export const DEVICE_NAME = "StarTracker";
 
@@ -44,6 +46,20 @@ export interface Status {
   net: NetInterface[];
   ap: APState;
   live_preview: LivePreviewState;
+  schedule: ScheduledJob[];
+  suggestion: Suggestion | null;
+}
+
+/** Raw payload of CHAR_NETWORK. */
+export interface NetworkPayload {
+  v: number;
+  net: NetInterface[];
+  ap: APState;
+}
+
+/** Raw payload of CHAR_SCHEDULE. */
+export interface SchedulePayload {
+  v: number;
   schedule: ScheduledJob[];
   suggestion: Suggestion | null;
 }

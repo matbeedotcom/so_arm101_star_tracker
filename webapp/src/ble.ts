@@ -12,10 +12,14 @@ import {
   CHAR_POSES,
   CHAR_LOG,
   CHAR_PREVIEW,
+  CHAR_NETWORK,
+  CHAR_SCHEDULE,
   DEVICE_NAME,
   type Command,
   type Info,
+  type NetworkPayload,
   type PosesPayload,
+  type SchedulePayload,
   type Status,
 } from "./protocol";
 
@@ -35,7 +39,29 @@ export class StarTrackerClient {
     poses?: BluetoothRemoteGATTCharacteristic;
     log?: BluetoothRemoteGATTCharacteristic;
     preview?: BluetoothRemoteGATTCharacteristic;
+    network?: BluetoothRemoteGATTCharacteristic;
+    schedule?: BluetoothRemoteGATTCharacteristic;
   } = {};
+
+  // Latest payloads of the secondary characteristics — merged into the
+  // Status object so existing components stay unaware of the split.
+  private _latestNetwork: NetworkPayload = { v: 1, net: [], ap: { active: false, ssid: null, passphrase: null, iface: null, client_count: 0 } };
+  private _latestSchedule: SchedulePayload = { v: 1, schedule: [], suggestion: null };
+  private _latestStatus: Status | null = null;
+
+  /** Apply newly received Status (or null to re-emit merged) to listeners. */
+  private _emitStatus(raw: Status | null): void {
+    if (raw) this._latestStatus = raw;
+    if (!this._latestStatus) return;
+    const merged: Status = {
+      ...this._latestStatus,
+      net: this._latestNetwork.net,
+      ap: this._latestNetwork.ap,
+      schedule: this._latestSchedule.schedule,
+      suggestion: this._latestSchedule.suggestion,
+    };
+    this._statusListeners.forEach((fn) => fn(merged));
+  }
 
   // Request ids for command correlation
   private _nextReq = 1;
@@ -82,16 +108,18 @@ export class StarTrackerClient {
     this.chars.info    = await this.service.getCharacteristic(CHAR_INFO);
     this.chars.poses   = await this.service.getCharacteristic(CHAR_POSES);
     this.chars.log     = await this.service.getCharacteristic(CHAR_LOG);
-    // CHAR_PREVIEW is optional — older firmware won't have it.
-    try { this.chars.preview = await this.service.getCharacteristic(CHAR_PREVIEW); }
-    catch { /* preview unsupported */ }
+    // Optional chars — older firmware may not have them. Failing to
+    // get one shouldn't break the whole connection.
+    try { this.chars.preview  = await this.service.getCharacteristic(CHAR_PREVIEW); }  catch {}
+    try { this.chars.network  = await this.service.getCharacteristic(CHAR_NETWORK); }  catch {}
+    try { this.chars.schedule = await this.service.getCharacteristic(CHAR_SCHEDULE); } catch {}
 
     this.chars.status.addEventListener("characteristicvaluechanged", (e) => {
       const v = (e.target as BluetoothRemoteGATTCharacteristic).value;
       if (!v) return;
       try {
-        const s = JSON.parse(td.decode(v)) as Status;
-        this._statusListeners.forEach((fn) => fn(s));
+        const raw = JSON.parse(td.decode(v)) as Status;
+        this._emitStatus(raw);
       } catch {/* malformed — skip */}
     });
     this.chars.poses.addEventListener("characteristicvaluechanged", (e) => {
@@ -108,6 +136,32 @@ export class StarTrackerClient {
       const line = td.decode(v);
       this._logListeners.forEach((fn) => fn(line));
     });
+
+    // Network — re-fires status to listeners with merged net/ap.
+    if (this.chars.network) {
+      this.chars.network.addEventListener("characteristicvaluechanged", (e) => {
+        const v = (e.target as BluetoothRemoteGATTCharacteristic).value;
+        if (!v) return;
+        try {
+          this._latestNetwork = JSON.parse(td.decode(v)) as NetworkPayload;
+          this._emitStatus(null);
+        } catch {/* skip */}
+      });
+      try { await this.chars.network.startNotifications(); } catch {/* skip */}
+    }
+
+    // Schedule — same pattern.
+    if (this.chars.schedule) {
+      this.chars.schedule.addEventListener("characteristicvaluechanged", (e) => {
+        const v = (e.target as BluetoothRemoteGATTCharacteristic).value;
+        if (!v) return;
+        try {
+          this._latestSchedule = JSON.parse(td.decode(v)) as SchedulePayload;
+          this._emitStatus(null);
+        } catch {/* skip */}
+      });
+      try { await this.chars.schedule.startNotifications(); } catch {/* skip */}
+    }
 
     await this.chars.status.startNotifications();
     await this.chars.poses.startNotifications();
@@ -130,11 +184,21 @@ export class StarTrackerClient {
   }
 
   private async _readInitial(): Promise<void> {
+    // Prime the secondary caches first so the very first status emit
+    // already has net/schedule merged in.
+    try {
+      const v = await this.chars.network?.readValue();
+      if (v) this._latestNetwork = JSON.parse(td.decode(v)) as NetworkPayload;
+    } catch {/* optional */}
+    try {
+      const v = await this.chars.schedule?.readValue();
+      if (v) this._latestSchedule = JSON.parse(td.decode(v)) as SchedulePayload;
+    } catch {/* optional */}
     try {
       const v = await this.chars.status?.readValue();
       if (v) {
         const s = JSON.parse(td.decode(v)) as Status;
-        this._statusListeners.forEach((fn) => fn(s));
+        this._emitStatus(s);
       }
     } catch {/* status may be empty on first connect */}
     try {

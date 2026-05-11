@@ -24,7 +24,9 @@ CHAR_STATUS  = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d103"
 CHAR_INFO    = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d104"
 CHAR_POSES   = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d105"
 CHAR_LOG     = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d106"
-CHAR_PREVIEW = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d107"  # raw JPEG bytes, ≤220 B
+CHAR_PREVIEW  = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d107"  # raw JPEG bytes, ≤220 B
+CHAR_NETWORK  = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d108"  # net + ap (notify on change)
+CHAR_SCHEDULE = "b87a5e8c-c2a1-4d8a-9f3a-c7e8b8c0d109"  # schedule + suggestion
 
 DEVICE_NAME = "StarTracker"
 PROTOCOL_VERSION = 1
@@ -123,6 +125,16 @@ PROTOCOL_VERSION = 1
 #   Raw JPEG bytes, ≤220 B (fits in one ATT MTU). Throttled to ≤2 Hz.
 #   The session keeps this alive even with no Wi-Fi — it's the fallback
 #   visual feedback when bulk media streaming isn't an option.
+#
+# ── Network (device → client, CHAR_NETWORK, read + notify) ──
+#   Split out of Status to keep that under the ATT MTU. Notified only
+#   when contents change.
+#     {"v":1,
+#      "net":[{"name":"wlan0","ip":"192.168.18.2","type":"wifi"}, ...],
+#      "ap": {...}}
+#
+# ── Schedule (device → client, CHAR_SCHEDULE, read + notify) ──
+#     {"v":1, "schedule":[...], "suggestion": {...} | null}
 #
 # ── Info (device → client, CHAR_INFO, read-only) ──
 #

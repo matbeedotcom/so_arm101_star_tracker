@@ -183,7 +183,12 @@ class TrackerSession:
             except Exception: pass
 
     def snapshot(self) -> dict:
-        """Latest status as a plain dict (safe to JSON-encode)."""
+        """High-frequency status — small enough to fit a BLE notification.
+
+        Long-tail / slow-changing state lives in ``network_snapshot`` and
+        ``schedule_snapshot`` (separate BLE characteristics) so each
+        update stays under the negotiated ATT MTU.
+        """
         with self._lock:
             s = dict(self._status)
         s["v"] = 1
@@ -206,17 +211,25 @@ class TrackerSession:
             "token": self._media_token,
             "path": "/live",
         }
-        s["net"] = list(self._net)
-        s["ap"] = dict(self._ap)
         s["live_preview"] = (
             self.live_camera.status() if self.live_camera is not None
             else {"active": False, "available": False, "fps_target": 0,
                   "fps_actual": 0.0, "w": 0, "h": 0, "exposure_us": 0,
                   "frames": 0, "import_error": None}
         )
-        s["schedule"] = self.scheduler.list_jobs() if self.scheduler else []
-        s["suggestion"] = self._suggestion
         return s
+
+    def network_snapshot(self) -> dict:
+        return {"v": 1, "net": list(self._net), "ap": dict(self._ap)}
+
+    def schedule_snapshot(self) -> dict:
+        with self._lock:
+            sugg = dict(self._suggestion) if self._suggestion else None
+        return {
+            "v": 1,
+            "schedule": self.scheduler.list_jobs() if self.scheduler else [],
+            "suggestion": sugg,
+        }
 
     def list_poses(self) -> list:
         if not os.path.isdir(POSES_DIR):
